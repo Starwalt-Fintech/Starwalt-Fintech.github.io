@@ -23,6 +23,8 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
 .year-overview .ledger{margin:8px 0}.year-overview table{min-width:390px;font-size:13px}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
 .backup-tools .month-tools{margin:9px 0 0}.backup-tools .status:empty{display:none}.backup-tools input{max-width:100%;font-size:13px}
+.expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
+.rename-dialog{border:1px solid var(--line);border-radius:12px;padding:18px;width:min(390px,calc(100% - 28px));color:var(--ink)}.rename-dialog::backdrop{background:#10252288}.rename-dialog h2{font-size:19px;margin:0 0 8px}.rename-dialog .add-row{margin:0}.rename-dialog .add-row label{width:100%}.rename-dialog .add-row button[type=button]{background:#edf1e8;color:var(--ink)}
 </style>
 </head>
 <body>
@@ -89,6 +91,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <p class="status" id="backup-status" role="status"></p>
 </details>
 <div class="expense-filter" id="expense-filter" hidden>
+<label class="expense-search">Find an expense <input type="search" id="expense-search" placeholder="e.g. groceries"></label>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
 <p class="status" id="filter-status" role="status"></p>
 </div>
@@ -102,6 +105,13 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <p class="note">Blank amounts count as zero once you enter an estimate or actual. Each month has its own entries.</p>
 <noscript><p>Enable JavaScript to enter and track expenses.</p></noscript>
 </main>
+<dialog class="rename-dialog" id="rename-dialog" aria-labelledby="rename-heading">
+<h2 id="rename-heading">Rename expense</h2>
+<form class="add-row" id="rename-form">
+<label>New expense name<input id="rename-name" maxlength="60" required></label>
+<button type="submit">Save name</button><button type="button" id="rename-cancel">Cancel</button>
+</form>
+</dialog>
 <script>
 const byId = (id) => document.getElementById(id);
 const groups = {
@@ -122,6 +132,10 @@ let entries;
 let actualHistory;
 const monthLabel = new Intl.DateTimeFormat('en-IN', {month:'long',year:'numeric',timeZone:'UTC'});
 const overBudgetOnly = byId('over-budget-only');
+const expenseSearch = byId('expense-search');
+const renameDialog = byId('rename-dialog');
+const renameName = byId('rename-name');
+let renameTarget;
 const yearOverview = byId('year-overview');
 const historyLabel = new Intl.DateTimeFormat('en-IN', {month:'short',year:'numeric',timeZone:'UTC'});
 const shareFormat = new Intl.NumberFormat('en-IN', {style:'percent',maximumFractionDigits:1});
@@ -205,16 +219,49 @@ function describeComparison(current, previous, priorLabel) {
 }
 
 function applyExpenseFilter() {
+  const query = expenseSearch.value.trim().toLowerCase();
   let count = 0;
   for (const row of document.querySelectorAll('.entry')) {
     const isOverBudget = row.querySelector('.difference').classList.contains('negative');
-    row.hidden = overBudgetOnly.checked && !isOverBudget;
-    if (isOverBudget) count++;
+    const matchesName = row.querySelector('th').textContent.toLowerCase().includes(query);
+    row.hidden = !matchesName || (overBudgetOnly.checked && !isOverBudget);
+    if (!row.hidden) count++;
   }
-  byId('filter-status').textContent = overBudgetOnly.checked
-    ? (count === 0 ? 'No over-budget expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
+  byId('filter-status').textContent = query || overBudgetOnly.checked
+    ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
 }
+
+function startRename(entry, key, index) {
+  renameTarget = {entry,key,index,month:selectedMonth};
+  renameName.value = entry.name;
+  renameName.setCustomValidity('');
+  renameDialog.showModal();
+  renameDialog.scrollIntoView({block:"center"});
+  renameName.focus();
+  renameName.select();
+}
+
+byId('rename-cancel').addEventListener('click', () => renameDialog.close());
+renameName.addEventListener('input', () => renameName.setCustomValidity(''));
+byId('rename-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const name = renameName.value.trim();
+  if (!name) {
+    renameName.setCustomValidity('Enter an expense name.');
+    renameName.reportValidity();
+    return;
+  }
+
+  const {entry,key,index,month} = renameTarget;
+  renameDialog.close();
+  if (month !== selectedMonth || entries[key][index] !== entry) return;
+  entry.name = name;
+  saveMonth();
+  render();
+  const control = byId(key + '-rename-' + index);
+  (control.closest('tr').hidden ? expenseSearch : control).focus();
+});
 
 function updateSpendingInsights(current, groupActuals) {
   const months = [...actualHistory, {key:selectedMonth, actual:current}];
@@ -348,10 +395,19 @@ function render() {
         entries[key].splice(index, 1);
         saveMonth();
         render();
-        const actions = body.querySelectorAll('.remove');
+        const actions = body.querySelectorAll('.entry:not([hidden]) .remove');
         (actions[Math.min(index, actions.length - 1)] ?? byId('add-row').elements.namedItem('name')).focus();
       });
-      row.insertCell().append(action);
+      const rename = document.createElement('button');
+      rename.type = 'button';
+      rename.className = 'rename';
+      rename.id = key + '-rename-' + index;
+      rename.textContent = 'Rename';
+      rename.setAttribute('aria-label', 'Rename ' + entry.name);
+      rename.addEventListener('click', () => startRename(entry, key, index));
+      const actionsCell = row.insertCell();
+      actionsCell.className = 'row-actions';
+      actionsCell.append(rename, action);
     });
     const subtotal = body.insertRow();
     subtotal.className = 'subtotal';
@@ -711,6 +767,7 @@ for (const [key,input] of Object.entries(cashInputs)) {
   });
 }
 overBudgetOnly.addEventListener('change', applyExpenseFilter);
+expenseSearch.addEventListener('input', applyExpenseFilter);
 
 byId('add-row').addEventListener('submit', (event) => {
   event.preventDefault();
