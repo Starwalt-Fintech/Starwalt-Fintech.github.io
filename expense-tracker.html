@@ -11,7 +11,7 @@
 *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,sans-serif}a{color:inherit}input,select,button{font:inherit}button{cursor:pointer}input:focus-visible,select:focus-visible,button:focus-visible,a:focus-visible,[tabindex]:focus-visible{outline:3px solid #59894a;outline-offset:3px}.wrap{width:min(1000px,calc(100% - 32px));margin:auto}
 header{background:#102522;color:#f5faed}header .wrap{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 0}header a{text-underline-offset:4px}.brand{font-weight:750;text-decoration:none}.brand span{color:#d9f487;margin-right:7px}
 main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,serif;letter-spacing:-.045em}.intro{color:var(--muted);margin:10px 0 20px}.controls{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:14px}.controls label{font-weight:700}.controls input{margin-left:6px}.controls input,.amount{border:1px solid #a9b7a8;background:#fff;border-radius:6px;padding:7px;color:var(--ink)}.status{font-size:13px;color:var(--muted);margin:0}
-.totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 17px}.totals div{background:#e8efdd;border-radius:9px;padding:10px 14px}.totals dt{font-size:13px;color:var(--muted)}.totals dd{margin:2px 0 0;font-size:clamp(15px,3vw,23px);font-weight:800;overflow-wrap:anywhere}
+.month-tools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}.month-tools[hidden]{display:none}.month-tools button{padding:7px 11px;border:1px solid #a9b7a8;border-radius:6px;background:white;color:var(--green);font-weight:700}.month-tools button:hover{background:#e8efdd}.month-tools p{flex-basis:100%}.totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 17px}.totals div{background:#e8efdd;border-radius:9px;padding:10px 14px}.totals dt{font-size:13px;color:var(--muted)}.totals dd{margin:2px 0 0;font-size:clamp(15px,3vw,23px);font-weight:800;overflow-wrap:anywhere}
 .ledger{border:1px solid var(--line);border-radius:11px;background:#fff;overflow:auto}table{width:100%;min-width:520px;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right}th:first-child{text-align:left}thead th,.group th{background:var(--green);color:#fff}.group th{background:#38674d}.entry:nth-child(odd){background:#f5f7ef}.entry th{font-weight:550}.amount{width:100%;max-width:130px;text-align:right}.subtotal th,.subtotal td{background:#e8efdd;font-weight:750}.positive{background:#e1f1dd!important;color:#235638}.negative{background:#fae3df!important;color:#982d26}.remove{border:0;background:transparent;color:#873128;padding:3px;font-size:12px;text-decoration:underline}.difference{white-space:nowrap}
 .add-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:18px}.add-row label{display:grid;gap:4px;font-weight:650;font-size:13px}.add-row input,.add-row select{border:1px solid #a9b7a8;border-radius:6px;padding:7px;color:var(--ink);max-width:100%}.add-row button{border:0;border-radius:6px;padding:8px 12px;background:var(--green);color:#fff;font-weight:700}.note{font-size:13px;color:var(--muted);margin:13px 0 0}
 @media(max-width:460px){main{padding-top:28px}.totals{gap:5px}.totals div{padding:6px}.totals dt{font-size:11px}header a{font-size:14px}th,td{padding:6px}}
@@ -23,6 +23,11 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <h1>Household Monthly Expense Tracker</h1>
 <p class="intro">Enter what you planned to spend and what you actually spent. A negative difference means you went over budget.</p>
 <div class="controls"><label>Month <input type="month" id="month" required></label><p id="storage-status" class="status" role="status">Saved in this browser.</p></div>
+<div class="month-tools" id="month-tools" hidden>
+<button type="button" id="copy-estimates">Reuse last month’s estimates</button>
+<button type="button" id="export-expenses">Download month (CSV)</button>
+<p class="status" id="month-action" role="status"></p>
+</div>
 <dl class="totals" aria-label="Monthly totals">
 <div><dt>Total estimated</dt><dd id="estimated-total">₹0</dd></div>
 <div><dt>Total actual</dt><dd id="actual-total">₹0</dd></div>
@@ -57,7 +62,7 @@ function defaults() {
   ]));
 }
 
-function readMonth(key) {
+function readMonth(key, fallback = defaults) {
   if (memory.has(key)) return memory.get(key);
   try {
     const saved = localStorage.getItem('starwalt.expenses.v1.' + key);
@@ -68,7 +73,7 @@ function readMonth(key) {
   } catch {
     status.textContent = 'Browser storage is unavailable. Entries last until you close or reload this page.';
   }
-  return defaults();
+  return fallback();
 }
 
 function saveMonth() {
@@ -192,15 +197,108 @@ function selectMonth() {
     month.value = selectedMonth;
     return;
   }
+  byId('month-action').textContent = '';
   selectedMonth = month.value;
   entries = readMonth(selectedMonth);
   render();
 }
 
+function previousMonth(key) {
+  const [year, number] = key.split('-').map(Number);
+  return number === 1 ? String(year - 1).padStart(4, '0') + '-12' :
+    String(year).padStart(4, '0') + '-' + String(number - 1).padStart(2, '0');
+}
+
+function reuseEstimates(current, previous) {
+  let copied = 0;
+  for (const group of Object.keys(groups)) {
+    // Match budgeted expenses to rows in order within each group.
+    const matches = new Map();
+    for (const entry of current[group]) {
+      const name = entry.name.toLowerCase();
+      if (!matches.has(name)) matches.set(name, []);
+      matches.get(name).push(entry);
+    }
+    for (const source of previous[group]) {
+      if (source.estimated === '') continue;
+      const target = matches.get(source.name.toLowerCase())?.shift();
+      if (target && target.estimated !== '') continue;
+      if (target) {
+        target.estimated = source.estimated;
+      } else {
+        current[group].push({name:source.name, estimated:source.estimated, actual:''});
+      }
+      copied++;
+    }
+  }
+  return copied;
+}
+
+function csvText(value) {
+  const name = /^[\s]*[=+@-]|^[\t\r\n]/.test(value) ? "'" + value : value;
+  return '"' + name.replaceAll('"','""') + '"';
+}
+
+function expenseCsv(key, data) {
+  const format = (amount) => (amount / 100).toFixed(2);
+  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR)'];
+  let totalPlanned = 0;
+  let totalSpent = 0;
+  for (const [group, category] of Object.entries(groups)) {
+    let planned = 0;
+    let spent = 0;
+    for (const row of data[group]) {
+      const estimate = paise(row.estimated);
+      const actual = paise(row.actual);
+      planned += estimate;
+      spent += actual;
+      rows.push([key, csvText(category.name), csvText(row.name),
+        row.estimated === '' ? '' : format(estimate),
+        row.actual === '' ? '' : format(actual),
+        row.estimated === '' && row.actual === '' ? '' : format(estimate - actual)
+      ].join(','));
+    }
+    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent)].join(','));
+    totalPlanned += planned;
+    totalSpent += spent;
+  }
+  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent)].join(','));
+  return rows.join('\r\n') + '\r\n';
+}
+
+byId('copy-estimates').addEventListener('click', () => {
+  const previous = readMonth(previousMonth(selectedMonth), () => null);
+  const action = byId('month-action');
+  if (!previous || !Object.keys(groups).some(group => previous[group].some(row => row.estimated !== ''))) {
+    action.textContent = 'Last month has no estimates to reuse.';
+    return;
+  }
+  const copied = reuseEstimates(entries, previous);
+  if (copied === 0) {
+    action.textContent = 'The matching expenses already have estimates this month.';
+    return;
+  }
+  saveMonth();
+  render();
+  action.textContent = copied + (copied === 1 ? ' estimate copied. ' : ' estimates copied. ') + 'Existing estimates and actuals were kept.';
+});
+
+byId('export-expenses').addEventListener('click', () => {
+  const url = URL.createObjectURL(new Blob(['\uFEFF', expenseCsv(selectedMonth, entries)], {type:'text/csv;charset=utf-8'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'starwalt-expenses-' + selectedMonth + '.csv';
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
 const today = new Date();
 month.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2,'0');
 month.addEventListener('change', selectMonth);
 selectMonth();
+byId('month-tools').hidden = false;
 
 byId('add-row').addEventListener('submit', (event) => {
   event.preventDefault();
