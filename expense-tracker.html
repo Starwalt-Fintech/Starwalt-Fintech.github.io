@@ -28,6 +28,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .month-switcher{display:flex;flex-wrap:wrap;gap:6px}.month-switcher[hidden]{display:none}.month-switcher button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:5px 9px;font-size:13px;font-weight:700}.month-switcher button:hover{background:#e8efdd}.overruns{font-size:13px;margin:4px 0 0;padding-left:22px}.overruns li{padding:2px 0}.overruns strong{color:#982d26}.overruns span{color:var(--muted)}
 .payment-progress{margin:0 0 10px;color:var(--muted);font-size:13px}.payment-progress[hidden]{display:none}.payment-cell{text-align:center}.payment-cell input{width:18px;height:18px;accent-color:var(--green);vertical-align:middle;cursor:pointer}
 .due-cell{text-align:left;min-width:145px}.due-cell input{width:100%;padding:5px;font-size:13px}.due-state{display:block;font-weight:700;font-size:12px;margin-top:2px}.due-state:empty{display:none}.entry.payment-overdue .due-state{color:#982d26}.entry.payment-upcoming .due-state{color:#77541a}
+.recurring-control{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--green);padding:2px 4px}.recurring-control input{accent-color:var(--green);margin:0}
 </style>
 </head>
 <body>
@@ -41,6 +42,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </div><p id="storage-status" class="status" role="status">Saved in this browser.</p></div>
 <div class="month-tools" id="month-tools" hidden>
 <button type="button" id="copy-estimates">Reuse last month’s estimates</button>
+<button type="button" id="copy-recurring">Bring in recurring bills</button>
 <button type="button" id="export-expenses">Download month (CSV)</button>
 <p class="status" id="month-action" role="status"></p>
 </div>
@@ -475,8 +477,13 @@ function render() {
           date.value = entry.dueDate ?? '';
           return;
         }
-        if (date.value) entry.dueDate = date.value;
-        else delete entry.dueDate;
+        if (date.value) {
+          entry.dueDate = date.value;
+          if (entry.recurring) entry.billingDay = Number(date.value.slice(-2));
+        } else {
+          delete entry.dueDate;
+          delete entry.billingDay;
+        }
         saveMonth();
         updateTotals();
         applyExpenseFilter();
@@ -523,7 +530,20 @@ function render() {
       rename.addEventListener('click', () => startRename(entry, key, index));
       const actionsCell = row.insertCell();
       actionsCell.className = 'row-actions';
-      actionsCell.append(rename, action);
+      const recurringLabel = document.createElement('label');
+      recurringLabel.className = 'recurring-control';
+      const recurring = document.createElement('input');
+      recurring.type = 'checkbox';
+      recurring.checked = entry.recurring === true;
+      recurring.setAttribute('aria-label', 'Mark ' + entry.name + ' as recurring');
+      recurring.addEventListener('change', () => {
+        entry.recurring = recurring.checked;
+        if (recurring.checked && entry.dueDate) entry.billingDay = Number(entry.dueDate.slice(-2));
+        else delete entry.billingDay;
+        saveMonth();
+      });
+      recurringLabel.append(recurring, 'Recurring');
+      actionsCell.append(recurringLabel, rename, action);
     });
     const subtotal = body.insertRow();
     subtotal.className = 'subtotal';
@@ -610,7 +630,7 @@ function csvText(value) {
 
 function expenseCsv(key, data) {
   const format = (amount) => (amount / 100).toFixed(2);
-  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR),Payment status,Due date'];
+  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR),Payment status,Due date,Recurring'];
   let totalPlanned = 0;
   let totalSpent = 0;
   for (const [group, category] of Object.entries(groups)) {
@@ -625,16 +645,70 @@ function expenseCsv(key, data) {
         row.estimated === '' ? '' : format(estimate),
         row.actual === '' ? '' : format(actual),
         row.estimated === '' && row.actual === '' ? '' : format(estimate - actual),
-        row.paid === true ? 'Paid' : isTrackedExpense(row) ? 'Unpaid' : '', row.dueDate ?? ''
+        row.paid === true ? 'Paid' : isTrackedExpense(row) ? 'Unpaid' : '', row.dueDate ?? '', row.recurring === true ? 'Yes' : ''
       ].join(','));
     }
-    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent), '', ''].join(','));
+    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent), '', '', ''].join(','));
     totalPlanned += planned;
     totalSpent += spent;
   }
-  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), '', ''].join(','));
+  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), '', '', ''].join(','));
   return rows.join('\r\n') + '\r\n';
 }
+
+function dueDateForMonth(key, day) {
+  const end = new Date(key + '-01T00:00:00Z');
+  end.setUTCMonth(end.getUTCMonth() + 1, 0);
+  return key + '-' + String(Math.min(day, end.getUTCDate())).padStart(2,'0');
+}
+
+function bringRecurring(current, previous, key) {
+  let count = 0;
+  for (const group of Object.keys(groups)) {
+    const matches = new Map();
+    for (const entry of current[group]) {
+      const name = entry.name.toLowerCase();
+      if (!matches.has(name)) matches.set(name, []);
+      matches.get(name).push(entry);
+    }
+    for (const source of previous[group]) {
+      if (source.recurring !== true) continue;
+      let target = matches.get(source.name.toLowerCase())?.shift();
+      if (target?.recurring === true) continue;
+      if (!target) {
+        target = {name:source.name, estimated:'', actual:''};
+        current[group].push(target);
+      }
+      target.recurring = true;
+      if (target.estimated === '') target.estimated = source.estimated;
+      if (target.dueDate) {
+        target.billingDay = Number(target.dueDate.slice(-2));
+      } else if (source.billingDay || source.dueDate) {
+        target.billingDay = source.billingDay ?? Number(source.dueDate.slice(-2));
+        target.dueDate = dueDateForMonth(key, target.billingDay);
+      }
+      count++;
+    }
+  }
+  return count;
+}
+
+byId('copy-recurring').addEventListener('click', () => {
+  const previous = readMonth(previousMonth(selectedMonth), () => null);
+  const action = byId('month-action');
+  if (!previous || !Object.keys(groups).some(group => previous[group].some(row => row.recurring === true))) {
+    action.textContent = 'No bills were marked recurring last month.';
+    return;
+  }
+  const count = bringRecurring(entries, previous, selectedMonth);
+  if (count === 0) {
+    action.textContent = 'Last month’s recurring bills are already here.';
+    return;
+  }
+  saveMonth();
+  render();
+  action.textContent = count + (count === 1 ? ' recurring bill added. ' : ' recurring bills added. ') + 'Existing amounts and payment marks were kept.';
+});
 
 byId('copy-estimates').addEventListener('click', () => {
   const previous = readMonth(previousMonth(selectedMonth), () => null);
@@ -797,12 +871,18 @@ function validateBackup(data) {
           if (typeof row?.name !== 'string' || !row.name.trim() || row.name.length > 60 ||
               !validBackupAmount(row.estimated) || !validBackupAmount(row.actual) ||
               (row.paid !== undefined && typeof row.paid !== 'boolean') ||
-              (row.dueDate !== undefined && !validDueDate(row.dueDate))) {
+              (row.dueDate !== undefined && !validDueDate(row.dueDate)) ||
+              (row.recurring !== undefined && typeof row.recurring !== 'boolean') ||
+              (row.billingDay !== undefined && (!Number.isInteger(row.billingDay) || row.billingDay < 1 || row.billingDay > 31))) {
             throw new Error('Invalid expense entry in backup.');
           }
           const expense = {name:row.name, estimated:row.estimated, actual:row.actual};
           if (row.paid === true) expense.paid = true;
           if (row.dueDate) expense.dueDate = row.dueDate;
+          if (row.recurring === true) {
+            expense.recurring = true;
+            if (row.billingDay) expense.billingDay = row.billingDay;
+          }
           return expense;
         })];
       }));
