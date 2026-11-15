@@ -39,6 +39,9 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 .projection-table thead th{position:sticky;top:0;background:#edf4df}
 .projection-table th:first-child{text-align:left}
 @media(max-width:480px){header .wrap{flex-wrap:wrap;justify-content:flex-start;padding:10px 0}header .wrap nav{flex-wrap:wrap}}
+.expense-frame{width:100%;height:1200px;display:block;border:0;margin:0}
+#expense-tracker>.wrap{width:min(1000px,calc(100% - 32px))}
+#expense-tracker{padding-bottom:25px}
 </style>
 </head>
 <body>
@@ -46,7 +49,7 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 <header class="dark">
 <div class="wrap">
 <a class="brand" href="#top"><span class="mark" aria-hidden="true">✦</span><span>Starwalt <em>Fintech</em></span></a>
-<nav aria-label="Main navigation"><a href="#guides">Guides</a><a href="#calculator">Calculators</a><a href="./expense-tracker.html" target="_blank" rel="noopener">Expense Tracker</a><a class="nav-button" href="#contact">Contact</a></nav>
+<nav aria-label="Main navigation"><a href="#guides">Guides</a><a href="#calculator">Calculators</a><a href="#expense-tracker">Expense Tracker</a><a class="nav-button" href="#contact">Contact</a></nav>
 </div>
 </header>
 <main id="main">
@@ -337,6 +340,12 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 </div>
 <noscript><p class="fine">Enable JavaScript to update these estimates.</p></noscript>
 </div>
+</section>
+<section id="expense-tracker" class="section" aria-labelledby="expense-tracker-heading">
+<div class="wrap">
+<h2 id="expense-tracker-heading">Household Monthly Expense Tracker</h2>
+</div>
+<iframe class="expense-frame" id="expense-frame" src="./expense-tracker.html" title="Household expense tracker form" loading="lazy"></iframe>
 </section>
 <section id="contact" class="contact">
 <div class="wrap"><div><h2>Contact Starwalt Fintech</h2><p>Ask about a guide or suggest a topic.</p></div><a class="button" href="mailto:starwaltcompany@gmail.com">Email Starwalt Fintech</a></div>
@@ -831,6 +840,33 @@ topic.addEventListener('change', filterGuides);
 byId('guide-controls').hidden = false;
 summary.hidden = false;
 filterGuides();
+
+const expenseFrame = byId('expense-frame');
+let expenseResize;
+function fitExpenseTracker() {
+  const trackerDocument = expenseFrame.contentDocument;
+  const tracker = trackerDocument?.querySelector('main');
+  if (!tracker) return;
+
+  trackerDocument.querySelector('header').hidden = true;
+  tracker.querySelector('h1').hidden = true;
+  tracker.style.paddingTop = '0';
+  tracker.style.paddingBottom = '0';
+  tracker.style.display = 'flow-root';
+
+  function fit() {
+    expenseFrame.style.height = Math.ceil(tracker.getBoundingClientRect().height) + 'px';
+  }
+
+  expenseResize?.disconnect();
+  if ('ResizeObserver' in window) {
+    expenseResize = new ResizeObserver(fit);
+    expenseResize.observe(tracker);
+  }
+  fit();
+}
+expenseFrame.addEventListener('load', fitExpenseTracker);
+fitExpenseTracker();
 
 const chart = byId('growth');
 const sample = project(5000, 8, 120);
