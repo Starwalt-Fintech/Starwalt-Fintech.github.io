@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en-IN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102522">
+<meta name="description" content="Track household expenses by month, compare estimates with actual spending, and see how much is left in your budget.">
+<title>Household Monthly Expense Tracker | Starwalt Fintech</title>
+<style>
+:root{color-scheme:light;--ink:#132a25;--green:#214b38;--paper:#f7f7ef;--line:#dce3d5;--muted:#4d645b}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,sans-serif}a{color:inherit}input,select,button{font:inherit}button{cursor:pointer}input:focus-visible,select:focus-visible,button:focus-visible,a:focus-visible,[tabindex]:focus-visible{outline:3px solid #59894a;outline-offset:3px}.wrap{width:min(1000px,calc(100% - 32px));margin:auto}
+header{background:#102522;color:#f5faed}header .wrap{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 0}header a{text-underline-offset:4px}.brand{font-weight:750;text-decoration:none}.brand span{color:#d9f487;margin-right:7px}
+main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,serif;letter-spacing:-.045em}.intro{color:var(--muted);margin:10px 0 20px}.controls{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:14px}.controls label{font-weight:700}.controls input{margin-left:6px}.controls input,.amount{border:1px solid #a9b7a8;background:#fff;border-radius:6px;padding:7px;color:var(--ink)}.status{font-size:13px;color:var(--muted);margin:0}
+.totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 17px}.totals div{background:#e8efdd;border-radius:9px;padding:10px 14px}.totals dt{font-size:13px;color:var(--muted)}.totals dd{margin:2px 0 0;font-size:clamp(15px,3vw,23px);font-weight:800;overflow-wrap:anywhere}
+.ledger{border:1px solid var(--line);border-radius:11px;background:#fff;overflow:auto}table{width:100%;min-width:520px;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right}th:first-child{text-align:left}thead th,.group th{background:var(--green);color:#fff}.group th{background:#38674d}.entry:nth-child(odd){background:#f5f7ef}.entry th{font-weight:550}.amount{width:100%;max-width:130px;text-align:right}.subtotal th,.subtotal td{background:#e8efdd;font-weight:750}.positive{background:#e1f1dd!important;color:#235638}.negative{background:#fae3df!important;color:#982d26}.remove{border:0;background:transparent;color:#873128;padding:3px;font-size:12px;text-decoration:underline}.difference{white-space:nowrap}
+.add-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:18px}.add-row label{display:grid;gap:4px;font-weight:650;font-size:13px}.add-row input,.add-row select{border:1px solid #a9b7a8;border-radius:6px;padding:7px;color:var(--ink);max-width:100%}.add-row button{border:0;border-radius:6px;padding:8px 12px;background:var(--green);color:#fff;font-weight:700}.note{font-size:13px;color:var(--muted);margin:13px 0 0}
+@media(max-width:460px){main{padding-top:28px}.totals{gap:5px}.totals div{padding:6px}.totals dt{font-size:11px}header a{font-size:14px}th,td{padding:6px}}
+</style>
+</head>
+<body>
+<header><div class="wrap"><a class="brand" href="./"><span aria-hidden="true">✦</span>Starwalt Fintech</a><a href="./#calculator">Back to calculators</a></div></header>
+<main class="wrap">
+<h1>Household Monthly Expense Tracker</h1>
+<p class="intro">Enter what you planned to spend and what you actually spent. A negative difference means you went over budget.</p>
+<div class="controls"><label>Month <input type="month" id="month" required></label><p id="storage-status" class="status" role="status">Saved in this browser.</p></div>
+<dl class="totals" aria-label="Monthly totals">
+<div><dt>Total estimated</dt><dd id="estimated-total">₹0</dd></div>
+<div><dt>Total actual</dt><dd id="actual-total">₹0</dd></div>
+<div id="difference-card"><dt>Difference</dt><dd id="difference-total">₹0</dd></div>
+</dl>
+<div class="ledger" role="region" aria-label="Expense table" tabindex="0">
+<table aria-label="Household expenses by category">
+<thead><tr><th scope="col">Expense</th><th scope="col">Estimated (₹)</th><th scope="col">Actual (₹)</th><th scope="col">Difference</th><th scope="col">Actions</th></tr></thead>
+<tbody id="essentials"></tbody><tbody id="other"></tbody>
+</table>
+</div>
+<form class="add-row" id="add-row"><label>Expense name<input name="name" maxlength="60" required placeholder="e.g. Pet care"></label><label>Group<select name="group"><option value="essentials">Household essentials</option><option value="other">Other expenses</option></select></label><button type="submit">Add expense</button></form>
+<p class="note">Blank amounts count as zero once you enter an estimate or actual. Each month has its own entries.</p>
+<noscript><p>Enable JavaScript to enter and track expenses.</p></noscript>
+</main>
+<script>
+const byId = (id) => document.getElementById(id);
+const groups = {
+  essentials: {name:'Household essentials', defaults:['Rent or home EMI','Groceries','Electricity','Water and gas','Internet and phone','Transportation','Medicines']},
+  other: {name:'Other expenses', defaults:['Dining out','Shopping','Education','Entertainment','Home maintenance','Subscriptions','Miscellaneous']}
+};
+const money = new Intl.NumberFormat('en-IN', {style:'currency',currency:'INR',minimumFractionDigits:0,maximumFractionDigits:2});
+const month = byId('month');
+const status = byId('storage-status');
+const memory = new Map();
+let selectedMonth;
+let entries;
+
+function defaults() {
+  return Object.fromEntries(Object.entries(groups).map(([key,group]) => [
+    key, group.defaults.map(name => ({name, estimated:'', actual:''}))
+  ]));
+}
+
+function readMonth(key) {
+  if (memory.has(key)) return memory.get(key);
+  try {
+    const saved = localStorage.getItem('starwalt.expenses.v1.' + key);
+    if (saved) {
+      const data = JSON.parse(saved);
+      if (Object.keys(groups).every(group => Array.isArray(data?.[group]))) return data;
+    }
+  } catch {
+    status.textContent = 'Browser storage is unavailable. Entries last until you close or reload this page.';
+  }
+  return defaults();
+}
+
+function saveMonth() {
+  memory.set(selectedMonth, entries);
+  try {
+    localStorage.setItem('starwalt.expenses.v1.' + selectedMonth, JSON.stringify(entries));
+    if (status.textContent !== 'Saved in this browser.') status.textContent = 'Saved in this browser.';
+  } catch {
+    status.textContent = 'Browser storage is unavailable. Entries last until you close or reload this page.';
+  }
+}
+
+function addCell(row, tag, value) {
+  const cell = document.createElement(tag);
+  cell.textContent = value;
+  row.append(cell);
+  return cell;
+}
+
+function paise(value) {
+  return Math.round((Number(value) || 0) * 100);
+}
+
+function difference(cell, amount, valueCell = cell) {
+  valueCell.textContent = amount === null ? '—' : money.format(amount / 100);
+  cell.classList.toggle('positive', amount > 0);
+  cell.classList.toggle('negative', amount < 0);
+}
+
+function updateTotals() {
+  let estimated = 0;
+  let actual = 0;
+  for (const key of Object.keys(groups)) {
+    let groupEstimated = 0;
+    let groupActual = 0;
+    entries[key].forEach((entry, index) => {
+      const planned = paise(entry.estimated);
+      const spent = paise(entry.actual);
+      groupEstimated += planned;
+      groupActual += spent;
+      difference(byId(key + '-difference-' + index), entry.estimated || entry.actual ? planned - spent : null);
+    });
+    byId(key + '-estimated').textContent = money.format(groupEstimated / 100);
+    byId(key + '-actual').textContent = money.format(groupActual / 100);
+    difference(byId(key + '-difference'), groupEstimated - groupActual);
+    estimated += groupEstimated;
+    actual += groupActual;
+  }
+  byId('estimated-total').textContent = money.format(estimated / 100);
+  byId('actual-total').textContent = money.format(actual / 100);
+  difference(byId('difference-card'), estimated - actual, byId('difference-total'));
+}
+
+function render() {
+  for (const [key, group] of Object.entries(groups)) {
+    const body = byId(key);
+    body.replaceChildren();
+    const heading = body.insertRow();
+    heading.className = 'group';
+    const groupCell = addCell(heading, 'th', group.name);
+    groupCell.colSpan = 5;
+    groupCell.scope = 'rowgroup';
+    entries[key].forEach((entry,index) => {
+      const row = body.insertRow();
+      row.className = 'entry';
+      addCell(row, 'th', entry.name).scope = 'row';
+      for (const field of ['estimated','actual']) {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.inputMode = 'decimal';
+        input.min = '0';
+        input.max = '1000000000';
+        input.step = '0.01';
+        input.className = 'amount';
+        input.value = entry[field];
+        input.setAttribute('aria-label', entry.name + ' ' + field + ' amount');
+        input.addEventListener('input', () => {
+          if (!input.validity.valid) return;
+          entry[field] = input.value;
+          updateTotals();
+          saveMonth();
+        });
+        input.addEventListener('blur', () => {
+          if (!input.validity.valid) {
+            input.reportValidity();
+            input.value = entry[field];
+          }
+        });
+        row.insertCell().append(input);
+      }
+      const delta = row.insertCell();
+      delta.id = key + '-difference-' + index;
+      delta.className = 'difference';
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'remove';
+      action.textContent = 'Remove';
+      action.setAttribute('aria-label', 'Remove ' + entry.name);
+      action.addEventListener('click', () => {
+        entries[key].splice(index, 1);
+        saveMonth();
+        render();
+        const actions = body.querySelectorAll('.remove');
+        (actions[Math.min(index, actions.length - 1)] ?? byId('add-row').elements.namedItem('name')).focus();
+      });
+      row.insertCell().append(action);
+    });
+    const subtotal = body.insertRow();
+    subtotal.className = 'subtotal';
+    addCell(subtotal, 'th', group.name + ' subtotal').scope = 'row';
+    for (const kind of ['estimated','actual','difference']) {
+      subtotal.insertCell().id = key + '-' + kind;
+    }
+    subtotal.insertCell();
+  }
+  updateTotals();
+}
+
+function selectMonth() {
+  if (!/^\d{4}-\d{2}$/.test(month.value)) {
+    month.value = selectedMonth;
+    return;
+  }
+  selectedMonth = month.value;
+  entries = readMonth(selectedMonth);
+  render();
+}
+
+const today = new Date();
+month.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2,'0');
+month.addEventListener('change', selectMonth);
+selectMonth();
+
+byId('add-row').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const fields = event.currentTarget.elements;
+  const name = fields.namedItem('name');
+  const label = name.value.trim();
+  if (!label) return;
+  entries[fields.namedItem('group').value].push({name:label, estimated:'', actual:''});
+  saveMonth();
+  render();
+  name.value = '';
+  name.focus();
+});
+</script>
+</body>
+</html>
