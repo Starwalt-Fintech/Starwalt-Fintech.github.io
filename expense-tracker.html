@@ -27,6 +27,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .rename-dialog{border:1px solid var(--line);border-radius:12px;padding:18px;width:min(390px,calc(100% - 28px));color:var(--ink)}.rename-dialog::backdrop{background:#10252288}.rename-dialog h2{font-size:19px;margin:0 0 8px}.rename-dialog .add-row{margin:0}.rename-dialog .add-row label{width:100%}.rename-dialog .add-row button[type=button]{background:#edf1e8;color:var(--ink)}
 .month-switcher{display:flex;flex-wrap:wrap;gap:6px}.month-switcher[hidden]{display:none}.month-switcher button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:5px 9px;font-size:13px;font-weight:700}.month-switcher button:hover{background:#e8efdd}.overruns{font-size:13px;margin:4px 0 0;padding-left:22px}.overruns li{padding:2px 0}.overruns strong{color:#982d26}.overruns span{color:var(--muted)}
 .payment-progress{margin:0 0 10px;color:var(--muted);font-size:13px}.payment-progress[hidden]{display:none}.payment-cell{text-align:center}.payment-cell input{width:18px;height:18px;accent-color:var(--green);vertical-align:middle;cursor:pointer}
+.due-cell{text-align:left;min-width:145px}.due-cell input{width:100%;padding:5px;font-size:13px}.due-state{display:block;font-weight:700;font-size:12px;margin-top:2px}.due-state:empty{display:none}.entry.payment-overdue .due-state{color:#982d26}.entry.payment-upcoming .due-state{color:#77541a}
 </style>
 </head>
 <body>
@@ -102,12 +103,13 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <label class="expense-search">Find an expense <input type="search" id="expense-search" placeholder="e.g. groceries"></label>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
 <label><input type="checkbox" id="unpaid-only">Show unpaid expenses only</label>
+<label><input type="checkbox" id="overdue-only">Show overdue expenses only</label>
 <p class="status" id="filter-status" role="status"></p>
 </div>
 <p class="payment-progress" id="payment-progress" hidden></p>
 <div class="ledger" role="region" aria-label="Expense table" tabindex="0">
 <table aria-label="Household expenses by category">
-<thead><tr><th scope="col">Expense</th><th scope="col">Estimated (₹)</th><th scope="col">Actual (₹)</th><th scope="col">Difference</th><th scope="col" class="payment-cell">Paid</th><th scope="col">Actions</th></tr></thead>
+<thead><tr><th scope="col">Expense</th><th scope="col">Estimated (₹)</th><th scope="col">Actual (₹)</th><th scope="col">Difference</th><th scope="col">Due date</th><th scope="col" class="payment-cell">Paid</th><th scope="col">Actions</th></tr></thead>
 <tbody id="essentials"></tbody><tbody id="other"></tbody>
 </table>
 </div>
@@ -143,6 +145,7 @@ let actualHistory;
 const monthLabel = new Intl.DateTimeFormat('en-IN', {month:'long',year:'numeric',timeZone:'UTC'});
 const overBudgetOnly = byId('over-budget-only');
 const unpaidOnly = byId('unpaid-only');
+const overdueOnly = byId('overdue-only');
 const expenseSearch = byId('expense-search');
 const renameDialog = byId('rename-dialog');
 const renameName = byId('rename-name');
@@ -236,10 +239,11 @@ function applyExpenseFilter() {
     const isOverBudget = row.querySelector('.difference').classList.contains('negative');
     const matchesName = row.querySelector('th').textContent.toLowerCase().includes(query);
     const matchesPayment = !unpaidOnly.checked || row.classList.contains('payment-pending');
-    row.hidden = !matchesName || !matchesPayment || (overBudgetOnly.checked && !isOverBudget);
+    const matchesDue = !overdueOnly.checked || row.classList.contains('payment-overdue');
+    row.hidden = !matchesName || !matchesPayment || !matchesDue || (overBudgetOnly.checked && !isOverBudget);
     if (!row.hidden) count++;
   }
-  byId('filter-status').textContent = query || overBudgetOnly.checked || unpaidOnly.checked
+  byId('filter-status').textContent = query || overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked
     ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
 }
@@ -338,7 +342,26 @@ function renderOverruns(overruns) {
 }
 
 function isTrackedExpense(entry) {
-  return entry.estimated !== '' || entry.actual !== '' || entry.paid === true;
+  return entry.estimated !== '' || entry.actual !== '' || Boolean(entry.dueDate) || entry.paid === true;
+}
+
+function dateKey(date) {
+  return String(date.getFullYear()).padStart(4,'0') + '-' +
+    String(date.getMonth() + 1).padStart(2,'0') + '-' + String(date.getDate()).padStart(2,'0');
+}
+
+function validDueDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + 'T00:00:00Z');
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0,10) === value;
+}
+
+function dueState(entry, today, soon) {
+  if (entry.paid === true || !entry.dueDate) return '';
+  if (entry.dueDate < today) return 'Overdue';
+  if (entry.dueDate === today) return 'Due today';
+  if (entry.dueDate <= soon) return 'Due soon';
+  return '';
 }
 
 function updateTotals() {
@@ -348,6 +371,12 @@ function updateTotals() {
   const overruns = [];
   let paidCount = 0;
   let pendingCount = 0;
+  let overdueCount = 0;
+  let upcomingCount = 0;
+  const nextWeek = new Date();
+  const today = dateKey(nextWeek);
+  nextWeek.setDate(nextWeek.getDate() + 7);
+  const soon = dateKey(nextWeek);
   for (const key of Object.keys(groups)) {
     let groupEstimated = 0;
     let groupActual = 0;
@@ -364,6 +393,14 @@ function updateTotals() {
       delta.parentElement.classList.toggle('payment-pending', pending);
       if (paid) paidCount++;
       if (pending) pendingCount++;
+      const state = dueState(entry, today, soon);
+      const overdue = state === 'Overdue';
+      const upcoming = state === 'Due today' || state === 'Due soon';
+      delta.parentElement.classList.toggle('payment-overdue', overdue);
+      delta.parentElement.classList.toggle('payment-upcoming', upcoming);
+      byId(key + '-due-state-' + index).textContent = state;
+      if (overdue) overdueCount++;
+      if (upcoming) upcomingCount++;
     });
     byId(key + '-estimated').textContent = money.format(groupEstimated / 100);
     byId(key + '-actual').textContent = money.format(groupActual / 100);
@@ -382,7 +419,7 @@ function updateTotals() {
   updateSpendingInsights(currentActual, groupActuals);
   renderOverruns(overruns);
   byId('payment-progress').textContent = paidCount + ' paid · ' + pendingCount +
-    ' pending. The unpaid filter includes expenses with an estimated or actual amount.';
+    ' pending · ' + overdueCount + ' overdue · ' + upcomingCount + ' due within 7 days (including today).';
   updateCashFlow(estimated, actual);
   if (yearOverview.open) renderYear();
 }
@@ -394,7 +431,7 @@ function render() {
     const heading = body.insertRow();
     heading.className = 'group';
     const groupCell = appendText(heading, 'th', group.name);
-    groupCell.colSpan = 6;
+    groupCell.colSpan = 7;
     groupCell.scope = 'rowgroup';
     entries[key].forEach((entry,index) => {
       const row = body.insertRow();
@@ -421,13 +458,36 @@ function render() {
             input.reportValidity();
             input.value = entry[field];
           }
-          if (overBudgetOnly.checked || unpaidOnly.checked) applyExpenseFilter();
+          if (overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked) applyExpenseFilter();
         });
         row.insertCell().append(input);
       }
       const delta = row.insertCell();
       delta.id = key + '-difference-' + index;
       delta.className = 'difference';
+      const date = document.createElement('input');
+      date.type = 'date';
+      date.className = 'amount';
+      date.value = entry.dueDate ?? '';
+      date.setAttribute('aria-label', entry.name + ' due date');
+      date.addEventListener('change', () => {
+        if (date.value && !validDueDate(date.value)) {
+          date.value = entry.dueDate ?? '';
+          return;
+        }
+        if (date.value) entry.dueDate = date.value;
+        else delete entry.dueDate;
+        saveMonth();
+        updateTotals();
+        applyExpenseFilter();
+        if (row.hidden) overdueOnly.focus();
+      });
+      const dueCell = row.insertCell();
+      dueCell.className = 'due-cell';
+      dueCell.append(date);
+      const dueLabel = appendText(dueCell,'span','');
+      dueLabel.className = 'due-state';
+      dueLabel.id = key + '-due-state-' + index;
       const payment = document.createElement('input');
       payment.type = 'checkbox';
       payment.checked = entry.paid === true;
@@ -437,7 +497,7 @@ function render() {
         saveMonth();
         updateTotals();
         applyExpenseFilter();
-        if (row.hidden) unpaidOnly.focus();
+        if (row.hidden) (overdueOnly.checked ? overdueOnly : unpaidOnly).focus();
       });
       const paymentCell = row.insertCell();
       paymentCell.className = 'payment-cell';
@@ -471,6 +531,7 @@ function render() {
     for (const kind of ['estimated','actual','difference']) {
       subtotal.insertCell().id = key + '-' + kind;
     }
+    subtotal.insertCell();
     subtotal.insertCell();
     subtotal.insertCell();
   }
@@ -549,7 +610,7 @@ function csvText(value) {
 
 function expenseCsv(key, data) {
   const format = (amount) => (amount / 100).toFixed(2);
-  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR),Payment status'];
+  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR),Payment status,Due date'];
   let totalPlanned = 0;
   let totalSpent = 0;
   for (const [group, category] of Object.entries(groups)) {
@@ -564,14 +625,14 @@ function expenseCsv(key, data) {
         row.estimated === '' ? '' : format(estimate),
         row.actual === '' ? '' : format(actual),
         row.estimated === '' && row.actual === '' ? '' : format(estimate - actual),
-        row.paid === true ? 'Paid' : isTrackedExpense(row) ? 'Unpaid' : ''
+        row.paid === true ? 'Paid' : isTrackedExpense(row) ? 'Unpaid' : '', row.dueDate ?? ''
       ].join(','));
     }
-    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent), ''].join(','));
+    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent), '', ''].join(','));
     totalPlanned += planned;
     totalSpent += spent;
   }
-  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), ''].join(','));
+  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), '', ''].join(','));
   return rows.join('\r\n') + '\r\n';
 }
 
@@ -735,11 +796,13 @@ function validateBackup(data) {
         return [group, rows.map(row => {
           if (typeof row?.name !== 'string' || !row.name.trim() || row.name.length > 60 ||
               !validBackupAmount(row.estimated) || !validBackupAmount(row.actual) ||
-              (row.paid !== undefined && typeof row.paid !== 'boolean')) {
+              (row.paid !== undefined && typeof row.paid !== 'boolean') ||
+              (row.dueDate !== undefined && !validDueDate(row.dueDate))) {
             throw new Error('Invalid expense entry in backup.');
           }
           const expense = {name:row.name, estimated:row.estimated, actual:row.actual};
           if (row.paid === true) expense.paid = true;
+          if (row.dueDate) expense.dueDate = row.dueDate;
           return expense;
         })];
       }));
@@ -846,6 +909,10 @@ for (const [key,input] of Object.entries(cashInputs)) {
 }
 overBudgetOnly.addEventListener('change', applyExpenseFilter);
 unpaidOnly.addEventListener('change', applyExpenseFilter);
+overdueOnly.addEventListener('change', () => {
+  updateTotals();
+  applyExpenseFilter();
+});
 byId('payment-progress').hidden = false;
 expenseSearch.addEventListener('input', applyExpenseFilter);
 
