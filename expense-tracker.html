@@ -29,6 +29,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .payment-progress{margin:0 0 10px;color:var(--muted);font-size:13px}.payment-progress[hidden]{display:none}.payment-cell{text-align:center}.payment-cell input{width:18px;height:18px;accent-color:var(--green);vertical-align:middle;cursor:pointer}
 .due-cell{text-align:left;min-width:145px}.due-cell input{width:100%;padding:5px;font-size:13px}.due-state{display:block;font-weight:700;font-size:12px;margin-top:2px}.due-state:empty{display:none}.entry.payment-overdue .due-state{color:#982d26}.entry.payment-upcoming .due-state{color:#77541a}
 .recurring-control{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--green);padding:2px 4px}.recurring-control input{accent-color:var(--green);margin:0}
+.undo-remove{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#f6efdb;border-radius:7px;padding:7px 10px;margin:0 0 9px;font-size:13px}.undo-remove[hidden]{display:none}.undo-remove button{border:1px solid #a9b7a8;border-radius:6px;padding:4px 8px;background:#fff;color:var(--green);font-weight:700}
 </style>
 </head>
 <body>
@@ -109,6 +110,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <p class="status" id="filter-status" role="status"></p>
 </div>
 <p class="payment-progress" id="payment-progress" hidden></p>
+<div class="undo-remove" id="undo-remove" hidden><span id="undo-message" role="status"></span><button type="button" id="undo-button">Undo removal</button></div>
 <div class="ledger" role="region" aria-label="Expense table" tabindex="0">
 <table aria-label="Household expenses by category">
 <thead><tr><th scope="col">Expense</th><th scope="col">Estimated (₹)</th><th scope="col">Actual (₹)</th><th scope="col">Difference</th><th scope="col">Due date</th><th scope="col" class="payment-cell">Paid</th><th scope="col">Actions</th></tr></thead>
@@ -120,10 +122,11 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <noscript><p>Enable JavaScript to enter and track expenses.</p></noscript>
 </main>
 <dialog class="rename-dialog" id="rename-dialog" aria-labelledby="rename-heading">
-<h2 id="rename-heading">Rename expense</h2>
+<h2 id="rename-heading">Edit expense</h2>
 <form class="add-row" id="rename-form">
-<label>New expense name<input id="rename-name" maxlength="60" required></label>
-<button type="submit">Save name</button><button type="button" id="rename-cancel">Cancel</button>
+<label>Expense name<input id="rename-name" maxlength="60" required></label>
+<label>Expense group<select id="edit-expense-group"><option value="essentials">Household essentials</option><option value="other">Other expenses</option></select></label>
+<button type="submit">Save changes</button><button type="button" id="rename-cancel">Cancel</button>
 </form>
 </dialog>
 <script>
@@ -151,6 +154,8 @@ const overdueOnly = byId('overdue-only');
 const expenseSearch = byId('expense-search');
 const renameDialog = byId('rename-dialog');
 const renameName = byId('rename-name');
+const editExpenseGroup = byId('edit-expense-group');
+const removedByMonth = new Map();
 let renameTarget;
 const yearOverview = byId('year-overview');
 const historyLabel = new Intl.DateTimeFormat('en-IN', {month:'short',year:'numeric',timeZone:'UTC'});
@@ -253,6 +258,7 @@ function applyExpenseFilter() {
 function startRename(entry, key, index) {
   renameTarget = {entry,key,index,month:selectedMonth};
   renameName.value = entry.name;
+  editExpenseGroup.value = key;
   renameName.setCustomValidity('');
   renameDialog.showModal();
   renameDialog.scrollIntoView({block:"center"});
@@ -275,9 +281,15 @@ byId('rename-form').addEventListener('submit', (event) => {
   renameDialog.close();
   if (month !== selectedMonth || entries[key][index] !== entry) return;
   entry.name = name;
+  const destination = editExpenseGroup.value;
+  let newIndex = index;
+  if (destination !== key) {
+    entries[key].splice(index,1);
+    newIndex = entries[destination].push(entry) - 1;
+  }
   saveMonth();
   render();
-  const control = byId(key + '-rename-' + index);
+  const control = byId(destination + '-rename-' + newIndex);
   (control.closest('tr').hidden ? expenseSearch : control).focus();
 });
 
@@ -426,6 +438,26 @@ function updateTotals() {
   if (yearOverview.open) renderYear();
 }
 
+function renderUndo() {
+  const removed = removedByMonth.get(selectedMonth);
+  byId('undo-remove').hidden = !removed;
+  byId('undo-message').textContent = removed ? 'Removed ' + removed.entry.name + '.' : '';
+}
+
+byId('undo-button').addEventListener('click', () => {
+  const removed = removedByMonth.get(selectedMonth);
+  if (!removed) return;
+  const {key,index,entry} = removed;
+  const position = Math.min(index, entries[key].length);
+  entries[key].splice(position,0,entry);
+  removedByMonth.delete(selectedMonth);
+  saveMonth();
+  render();
+  const restored = byId(key + '-rename-' + position);
+  (restored.closest('tr').hidden ? expenseSearch : restored).focus();
+  byId('month-action').textContent = 'Restored ' + entry.name + '.';
+});
+
 function render() {
   for (const [key, group] of Object.entries(groups)) {
     const body = byId(key);
@@ -515,7 +547,8 @@ function render() {
       action.textContent = 'Remove';
       action.setAttribute('aria-label', 'Remove ' + entry.name);
       action.addEventListener('click', () => {
-        entries[key].splice(index, 1);
+        const [removed] = entries[key].splice(index, 1);
+        removedByMonth.set(selectedMonth, {key,index,entry:removed});
         saveMonth();
         render();
         const actions = body.querySelectorAll('.entry:not([hidden]) .remove');
@@ -525,8 +558,8 @@ function render() {
       rename.type = 'button';
       rename.className = 'rename';
       rename.id = key + '-rename-' + index;
-      rename.textContent = 'Rename';
-      rename.setAttribute('aria-label', 'Rename ' + entry.name);
+      rename.textContent = 'Edit';
+      rename.setAttribute('aria-label', 'Edit ' + entry.name);
       rename.addEventListener('click', () => startRename(entry, key, index));
       const actionsCell = row.insertCell();
       actionsCell.className = 'row-actions';
@@ -557,6 +590,7 @@ function render() {
   }
   updateTotals();
   applyExpenseFilter();
+  renderUndo();
 }
 
 function selectMonth() {
