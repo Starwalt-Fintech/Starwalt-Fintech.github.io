@@ -74,12 +74,13 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 </section>
 <section id="calculator" class="section tool">
 <div class="wrap">
-<div><p class="eyebrow">Savings calculator</p><h2>What could your savings grow to?</h2><p class="section-intro">Change the monthly amount, time horizon and assumed return to compare savings scenarios in rupees.</p><div class="tool-links" aria-label="More calculators"><a class="text-link" href="#goal-planner">Savings goal planner</a><a class="text-link" href="#emi-calculator">Loan EMI calculator</a><a class="text-link" href="#budget-planner">Budget planner</a><a class="text-link" href="#emergency-calculator">Emergency fund calculator</a><a class="text-link" href="#inflation-calculator">Inflation calculator</a><a class="text-link" href="#deposit-calculator">Fixed deposit calculator</a></div></div>
+<div><p class="eyebrow">Savings calculator</p><h2>What could your savings grow to?</h2><p class="section-intro">Compare regular monthly savings with a plan that increases your contribution each year.</p><div class="tool-links" aria-label="More calculators"><a class="text-link" href="#goal-planner">Savings goal planner</a><a class="text-link" href="#emi-calculator">Loan EMI calculator</a><a class="text-link" href="#budget-planner">Budget planner</a><a class="text-link" href="#emergency-calculator">Emergency fund calculator</a><a class="text-link" href="#inflation-calculator">Inflation calculator</a><a class="text-link" href="#deposit-calculator">Fixed deposit calculator</a></div></div>
 <form class="calculator" id="savings">
 <div class="inputs">
 <label>Monthly amount (₹)<input id="amount" type="number" inputmode="decimal" value="5000" required min="0" max="10000000" step="any"></label>
 <label>Annual return (%)<input id="rate" type="number" inputmode="decimal" value="8" required min="-50" max="30" step="any"></label>
 <label>Years<input id="years" type="number" inputmode="numeric" value="10" required min="1" max="50" step="1"></label>
+<label>Annual contribution increase (%)<input id="savings-step" type="number" inputmode="decimal" value="0" required min="0" max="100" step=".01"></label>
 </div>
 <button class="button calculate" type="submit">Calculate</button>
 <dl class="results" aria-live="polite" aria-atomic="true">
@@ -87,7 +88,7 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 <div><dt>Contributed</dt><dd id="principal">₹6,00,000</dd></div>
 <div><dt>Gain or loss</dt><dd id="growth-value">₹3,00,621</dd></div>
 </dl>
-<p class="fine">Assumes end-of-month contributions and a constant effective annual return. The illustration excludes taxes, fees and inflation.</p>
+<p class="fine">Monthly contributions increase after every 12 payments. The projection assumes a constant annual return and excludes taxes, fees and inflation.</p>
 <noscript><p class="fine">Enable JavaScript to update the projection.</p></noscript>
 </form>
 </div>
@@ -124,6 +125,7 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 </div>
 <button class="button calculate" type="submit">Calculate EMI</button>
 <button class="button export-button" type="button" id="download-repayment" hidden>Download repayment schedule (CSV)</button>
+<button class="button export-button" type="button" id="download-prepayment" hidden>Download extra-payment schedule (CSV)</button>
 <dl class="results" aria-live="polite" aria-atomic="true">
 <div><dt>Monthly EMI</dt><dd id="loan-monthly">₹16,667</dd></div>
 <div><dt>Interest before prepayments</dt><dd id="loan-interest">₹0</dd></div>
@@ -134,7 +136,7 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 <div><dt>Time saved</dt><dd id="loan-time-saved">0 months</dd></div>
 <div><dt>Interest saved</dt><dd id="loan-interest-saved">₹0</dd></div>
 </dl>
-<p class="fine">Extra payments start with the first EMI and reduce the principal. Estimates assume a fixed rate and exclude fees. The CSV shows the original schedule before extra payments.</p>
+<p class="fine">Extra payments start with the first EMI and reduce the principal. Estimates assume a fixed rate and exclude fees.</p>
 </form>
 <form class="calculator" id="budget-planner">
 <h3>Monthly budget planner</h3>
@@ -220,11 +222,32 @@ function project(amount, annualRate, months) {
   return amount * Math.expm1(monthlyLogRate * months) / Math.expm1(monthlyLogRate);
 }
 
+function projectSavings(amount, annualRate, years, step) {
+  if (step === 0) {
+    return { principal: amount * years * 12, future: project(amount, annualRate, years * 12) };
+  }
+
+  const growth = 1 + annualRate / 100;
+  const increase = 1 + step / 100;
+  const annualContributions = project(amount, annualRate, 12);
+  let principal = 0;
+  let future = 0;
+  let multiplier = 1;
+  for (let year = 0; year < years; year++) {
+    principal += amount * multiplier * 12;
+    future = future * growth + annualContributions * multiplier;
+    multiplier *= increase;
+  }
+  return { principal, future };
+}
+
 function updateResults() {
-  const amount = byId('amount').valueAsNumber;
-  const months = byId('years').valueAsNumber * 12;
-  const principal = amount * months;
-  const future = project(amount, byId('rate').valueAsNumber, months);
+  const { principal, future } = projectSavings(
+    byId('amount').valueAsNumber,
+    byId('rate').valueAsNumber,
+    byId('years').valueAsNumber,
+    byId('savings-step').valueAsNumber
+  );
 
   byId('future').textContent = money.format(future);
   byId('principal').textContent = money.format(principal);
@@ -253,7 +276,7 @@ function loanPayment(principal, annualRate, months) {
 }
 
 function comparePrepayment(principal, annualRate, months, extra, base) {
-  if (extra === 0) return { months, interestSaved: 0 };
+  if (extra === 0) return { months, interestSaved: 0, payment: base.monthly, finalPayment: base.monthly };
   const payment = base.monthly + extra;
   const rate = annualRate / 1200;
   const logRate = Math.log1p(rate);
@@ -268,7 +291,7 @@ function comparePrepayment(principal, annualRate, months, extra, base) {
     firstPrincipal * Math.expm1(fullMonths * logRate) / rate;
   const finalPayment = Math.min(payment, Math.max(0, principal - principalPaid) * (1 + rate));
   const total = payment * fullMonths + finalPayment;
-  return { months: payoffMonths, interestSaved: Math.min(base.interest, Math.max(0, base.total - total)) };
+  return { months: payoffMonths, payment, finalPayment, interestSaved: Math.min(base.interest, Math.max(0, base.total - total)) };
 }
 
 byId('goal-planner').addEventListener('submit', (event) => {
@@ -285,7 +308,6 @@ byId('goal-planner').addEventListener('submit', (event) => {
 });
 
 const emiForm = byId('emi-calculator');
-const repaymentButton = byId('download-repayment');
 
 function updateLoan() {
   const principal = byId('loan-amount').valueAsNumber;
@@ -299,7 +321,7 @@ function updateLoan() {
   byId('loan-payoff').textContent = monthsFormat.format(comparison.months);
   byId('loan-time-saved').textContent = monthsFormat.format(months - comparison.months);
   byId('loan-interest-saved').textContent = money.format(comparison.interestSaved);
-  return { principal, annualRate, months, monthly: result.monthly };
+  return { principal, annualRate, months, payment: result.monthly, finalPayment: result.monthly, comparison };
 }
 
 emiForm.addEventListener('submit', (event) => {
@@ -307,37 +329,56 @@ emiForm.addEventListener('submit', (event) => {
   updateLoan();
 });
 
-function repaymentCsv({ principal, annualRate, months, monthly }) {
+function repaymentCsv({ principal, annualRate, months, payment, finalPayment }) {
   const rate = annualRate / 1200;
   const logRate = Math.log1p(rate);
   const rows = ['Month,Payment (INR),Principal (INR),Interest (INR),Remaining balance (INR)'];
   let balance = principal;
   for (let month = 1; month <= months; month++) {
     const remaining = months - month;
-    const paidPrincipal = monthly * Math.exp(-(remaining + 1) * logRate);
+    const due = remaining === 0 ? finalPayment : payment;
     const interest = balance * rate;
-    // Value the remaining payments directly to avoid accumulated rounding drift.
-    balance = rate === 0 ? monthly * remaining :
-      monthly * -Math.expm1(-remaining * logRate) / rate;
-    const amounts = [monthly, paidPrincipal, interest, balance].map((value) => value.toFixed(2));
+    const paidPrincipal = Math.max(0, due - interest);
+    // The balance is the present value of the remaining instalments.
+    const regularPayments = remaining - 1;
+    if (remaining === 0) {
+      balance = 0;
+    } else if (rate === 0) {
+      balance = payment * regularPayments + finalPayment;
+    } else {
+      balance = payment * -Math.expm1(-regularPayments * logRate) / rate +
+        finalPayment * Math.exp(-remaining * logRate);
+    }
+    const amounts = [due, paidPrincipal, interest, balance].map((value) => value.toFixed(2));
     rows.push([month, ...amounts].join(','));
   }
   return rows.join('\r\n') + '\r\n';
 }
 
-repaymentButton.hidden = false;
-repaymentButton.addEventListener('click', () => {
+function downloadSchedule({ includeExtraPayments, filename }) {
   if (!emiForm.reportValidity()) return;
-  const blob = new Blob([repaymentCsv(updateLoan())], { type: 'text/csv;charset=utf-8' });
+  const schedule = updateLoan();
+  const selected = includeExtraPayments ? { ...schedule, ...schedule.comparison } : schedule;
+  const blob = new Blob([repaymentCsv(selected)], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'starwalt-loan-repayment.csv';
+  link.download = filename;
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-});
+}
+
+const schedules = [
+  { id: 'download-repayment', filename: 'starwalt-loan-repayment.csv', includeExtraPayments: false },
+  { id: 'download-prepayment', filename: 'starwalt-loan-extra-payments.csv', includeExtraPayments: true }
+];
+for (const schedule of schedules) {
+  const button = byId(schedule.id);
+  button.hidden = false;
+  button.addEventListener('click', () => downloadSchedule(schedule));
+}
 
 const monthsFormat = new Intl.NumberFormat('en-IN', {
   style: 'unit', unit: 'month', unitDisplay: 'long', maximumFractionDigits: 2
