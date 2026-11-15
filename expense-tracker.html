@@ -26,6 +26,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
 .rename-dialog{border:1px solid var(--line);border-radius:12px;padding:18px;width:min(390px,calc(100% - 28px));color:var(--ink)}.rename-dialog::backdrop{background:#10252288}.rename-dialog h2{font-size:19px;margin:0 0 8px}.rename-dialog .add-row{margin:0}.rename-dialog .add-row label{width:100%}.rename-dialog .add-row button[type=button]{background:#edf1e8;color:var(--ink)}
 .month-switcher{display:flex;flex-wrap:wrap;gap:6px}.month-switcher[hidden]{display:none}.month-switcher button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:5px 9px;font-size:13px;font-weight:700}.month-switcher button:hover{background:#e8efdd}.overruns{font-size:13px;margin:4px 0 0;padding-left:22px}.overruns li{padding:2px 0}.overruns strong{color:#982d26}.overruns span{color:var(--muted)}
+.payment-progress{margin:0 0 10px;color:var(--muted);font-size:13px}.payment-progress[hidden]{display:none}.payment-cell{text-align:center}.payment-cell input{width:18px;height:18px;accent-color:var(--green);vertical-align:middle;cursor:pointer}
 </style>
 </head>
 <body>
@@ -100,11 +101,13 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <div class="expense-filter" id="expense-filter" hidden>
 <label class="expense-search">Find an expense <input type="search" id="expense-search" placeholder="e.g. groceries"></label>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
+<label><input type="checkbox" id="unpaid-only">Show unpaid expenses only</label>
 <p class="status" id="filter-status" role="status"></p>
 </div>
+<p class="payment-progress" id="payment-progress" hidden></p>
 <div class="ledger" role="region" aria-label="Expense table" tabindex="0">
 <table aria-label="Household expenses by category">
-<thead><tr><th scope="col">Expense</th><th scope="col">Estimated (₹)</th><th scope="col">Actual (₹)</th><th scope="col">Difference</th><th scope="col">Actions</th></tr></thead>
+<thead><tr><th scope="col">Expense</th><th scope="col">Estimated (₹)</th><th scope="col">Actual (₹)</th><th scope="col">Difference</th><th scope="col" class="payment-cell">Paid</th><th scope="col">Actions</th></tr></thead>
 <tbody id="essentials"></tbody><tbody id="other"></tbody>
 </table>
 </div>
@@ -139,6 +142,7 @@ let entries;
 let actualHistory;
 const monthLabel = new Intl.DateTimeFormat('en-IN', {month:'long',year:'numeric',timeZone:'UTC'});
 const overBudgetOnly = byId('over-budget-only');
+const unpaidOnly = byId('unpaid-only');
 const expenseSearch = byId('expense-search');
 const renameDialog = byId('rename-dialog');
 const renameName = byId('rename-name');
@@ -231,10 +235,11 @@ function applyExpenseFilter() {
   for (const row of document.querySelectorAll('.entry')) {
     const isOverBudget = row.querySelector('.difference').classList.contains('negative');
     const matchesName = row.querySelector('th').textContent.toLowerCase().includes(query);
-    row.hidden = !matchesName || (overBudgetOnly.checked && !isOverBudget);
+    const matchesPayment = !unpaidOnly.checked || row.classList.contains('payment-pending');
+    row.hidden = !matchesName || !matchesPayment || (overBudgetOnly.checked && !isOverBudget);
     if (!row.hidden) count++;
   }
-  byId('filter-status').textContent = query || overBudgetOnly.checked
+  byId('filter-status').textContent = query || overBudgetOnly.checked || unpaidOnly.checked
     ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
 }
@@ -332,11 +337,17 @@ function renderOverruns(overruns) {
   byId('overrun-empty').hidden = top.length > 0;
 }
 
+function isTrackedExpense(entry) {
+  return entry.estimated !== '' || entry.actual !== '' || entry.paid === true;
+}
+
 function updateTotals() {
   let estimated = 0;
   let actual = 0;
   const groupActuals = {};
   const overruns = [];
+  let paidCount = 0;
+  let pendingCount = 0;
   for (const key of Object.keys(groups)) {
     let groupEstimated = 0;
     let groupActual = 0;
@@ -346,7 +357,13 @@ function updateTotals() {
       groupEstimated += planned;
       groupActual += spent;
       if (spent > planned) overruns.push({name:entry.name, group:groups[key].name, amount:spent - planned});
-      difference(byId(key + '-difference-' + index), entry.estimated || entry.actual ? planned - spent : null);
+      const delta = byId(key + '-difference-' + index);
+      difference(delta, entry.estimated || entry.actual ? planned - spent : null);
+      const paid = entry.paid === true;
+      const pending = !paid && isTrackedExpense(entry);
+      delta.parentElement.classList.toggle('payment-pending', pending);
+      if (paid) paidCount++;
+      if (pending) pendingCount++;
     });
     byId(key + '-estimated').textContent = money.format(groupEstimated / 100);
     byId(key + '-actual').textContent = money.format(groupActual / 100);
@@ -364,6 +381,8 @@ function updateTotals() {
     monthLabel.format(new Date(prior.key + '-01T00:00:00Z')));
   updateSpendingInsights(currentActual, groupActuals);
   renderOverruns(overruns);
+  byId('payment-progress').textContent = paidCount + ' paid · ' + pendingCount +
+    ' pending. The unpaid filter includes expenses with an estimated or actual amount.';
   updateCashFlow(estimated, actual);
   if (yearOverview.open) renderYear();
 }
@@ -375,7 +394,7 @@ function render() {
     const heading = body.insertRow();
     heading.className = 'group';
     const groupCell = appendText(heading, 'th', group.name);
-    groupCell.colSpan = 5;
+    groupCell.colSpan = 6;
     groupCell.scope = 'rowgroup';
     entries[key].forEach((entry,index) => {
       const row = body.insertRow();
@@ -402,13 +421,27 @@ function render() {
             input.reportValidity();
             input.value = entry[field];
           }
-          if (overBudgetOnly.checked) applyExpenseFilter();
+          if (overBudgetOnly.checked || unpaidOnly.checked) applyExpenseFilter();
         });
         row.insertCell().append(input);
       }
       const delta = row.insertCell();
       delta.id = key + '-difference-' + index;
       delta.className = 'difference';
+      const payment = document.createElement('input');
+      payment.type = 'checkbox';
+      payment.checked = entry.paid === true;
+      payment.setAttribute('aria-label', 'Mark ' + entry.name + ' as paid');
+      payment.addEventListener('change', () => {
+        entry.paid = payment.checked;
+        saveMonth();
+        updateTotals();
+        applyExpenseFilter();
+        if (row.hidden) unpaidOnly.focus();
+      });
+      const paymentCell = row.insertCell();
+      paymentCell.className = 'payment-cell';
+      paymentCell.append(payment);
       const action = document.createElement('button');
       action.type = 'button';
       action.className = 'remove';
@@ -438,6 +471,7 @@ function render() {
     for (const kind of ['estimated','actual','difference']) {
       subtotal.insertCell().id = key + '-' + kind;
     }
+    subtotal.insertCell();
     subtotal.insertCell();
   }
   updateTotals();
@@ -515,7 +549,7 @@ function csvText(value) {
 
 function expenseCsv(key, data) {
   const format = (amount) => (amount / 100).toFixed(2);
-  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR)'];
+  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR),Payment status'];
   let totalPlanned = 0;
   let totalSpent = 0;
   for (const [group, category] of Object.entries(groups)) {
@@ -529,14 +563,15 @@ function expenseCsv(key, data) {
       rows.push([key, csvText(category.name), csvText(row.name),
         row.estimated === '' ? '' : format(estimate),
         row.actual === '' ? '' : format(actual),
-        row.estimated === '' && row.actual === '' ? '' : format(estimate - actual)
+        row.estimated === '' && row.actual === '' ? '' : format(estimate - actual),
+        row.paid === true ? 'Paid' : isTrackedExpense(row) ? 'Unpaid' : ''
       ].join(','));
     }
-    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent)].join(','));
+    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent), ''].join(','));
     totalPlanned += planned;
     totalSpent += spent;
   }
-  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent)].join(','));
+  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), ''].join(','));
   return rows.join('\r\n') + '\r\n';
 }
 
@@ -699,10 +734,13 @@ function validateBackup(data) {
         if (!Array.isArray(rows)) throw new Error('Missing expense group.');
         return [group, rows.map(row => {
           if (typeof row?.name !== 'string' || !row.name.trim() || row.name.length > 60 ||
-              !validBackupAmount(row.estimated) || !validBackupAmount(row.actual)) {
+              !validBackupAmount(row.estimated) || !validBackupAmount(row.actual) ||
+              (row.paid !== undefined && typeof row.paid !== 'boolean')) {
             throw new Error('Invalid expense entry in backup.');
           }
-          return {name:row.name, estimated:row.estimated, actual:row.actual};
+          const expense = {name:row.name, estimated:row.estimated, actual:row.actual};
+          if (row.paid === true) expense.paid = true;
+          return expense;
         })];
       }));
     }
@@ -807,6 +845,8 @@ for (const [key,input] of Object.entries(cashInputs)) {
   });
 }
 overBudgetOnly.addEventListener('change', applyExpenseFilter);
+unpaidOnly.addEventListener('change', applyExpenseFilter);
+byId('payment-progress').hidden = false;
 expenseSearch.addEventListener('input', applyExpenseFilter);
 
 byId('add-row').addEventListener('submit', (event) => {
