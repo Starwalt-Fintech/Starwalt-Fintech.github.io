@@ -22,6 +22,13 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 @media(max-width:410px){h1{font-size:56px}.cards{grid-template-columns:1fr}.card{min-height:0}.graph,.calculator{padding:16px}.inputs{grid-template-columns:1fr}.results{grid-template-columns:1fr 1fr}.results div:first-child{grid-column:1/-1}}
 @media(max-width:410px){.tool-grid .calculator .results{grid-template-columns:1fr 1fr}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
+
+.offer-fields{border:1px solid var(--line);border-radius:8px;margin:12px 0 0;padding:10px;min-width:0}
+.offer-fields legend{font-size:14px;font-weight:750;padding:0 5px}
+.offer-results{width:100%;border-collapse:collapse;margin-top:14px;text-align:left;font-size:13px;table-layout:fixed}
+.offer-results th,.offer-results td{border-bottom:1px solid var(--line);padding:8px 5px;overflow-wrap:anywhere}
+.offer-results tbody th{font-weight:500}.offer-results td{font-variant-numeric:tabular-nums}
+.offer-result{background:#edf4df;border-radius:9px;margin-top:12px;padding:10px;font-weight:750}
 </style>
 </head>
 <body>
@@ -74,7 +81,7 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 </section>
 <section id="calculator" class="section tool">
 <div class="wrap">
-<div><p class="eyebrow">Savings calculator</p><h2>What could your savings grow to?</h2><p class="section-intro">Compare regular monthly savings with a plan that increases your contribution each year.</p><div class="tool-links" aria-label="More calculators"><a class="text-link" href="#goal-planner">Savings goal planner</a><a class="text-link" href="#emi-calculator">Loan EMI calculator</a><a class="text-link" href="#budget-planner">Budget planner</a><a class="text-link" href="#emergency-calculator">Emergency fund calculator</a><a class="text-link" href="#inflation-calculator">Inflation calculator</a><a class="text-link" href="#deposit-calculator">Fixed deposit calculator</a></div></div>
+<div><p class="eyebrow">Savings calculator</p><h2>What could your savings grow to?</h2><p class="section-intro">Compare regular monthly savings with a plan that increases your contribution each year.</p><div class="tool-links" aria-label="More calculators"><a class="text-link" href="#goal-planner">Savings goal planner</a><a class="text-link" href="#emi-calculator">Loan EMI calculator</a><a class="text-link" href="#budget-planner">Budget planner</a><a class="text-link" href="#emergency-calculator">Emergency fund calculator</a><a class="text-link" href="#inflation-calculator">Inflation calculator</a><a class="text-link" href="#deposit-calculator">Fixed deposit calculator</a><a class="text-link" href="#net-worth-calculator">Net worth calculator</a><a class="text-link" href="#loan-offer-comparison">Loan offer comparison</a></div></div>
 <form class="calculator" id="savings">
 <div class="inputs">
 <label>Monthly amount (₹)<input id="amount" type="number" inputmode="decimal" value="5000" required min="0" max="10000000" step="any"></label>
@@ -202,6 +209,57 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 <div><dt>Original deposit</dt><dd id="deposit-principal">₹1,00,000</dd></div>
 </dl>
 <p class="fine">Assumes a fixed rate and that all interest stays invested until maturity. The estimate excludes taxes and fees.</p>
+</form>
+<form class="calculator" id="net-worth-calculator">
+<h3>Net worth calculator</h3>
+<p class="section-intro">Add up what you own and subtract what you owe to see your current net worth.</p>
+<div class="inputs">
+<label>Cash and bank balances (₹)<input name="cash" type="number" inputmode="decimal" value="100000" required min="0" max="10000000000" step=".01"></label>
+<label>Investments (₹)<input name="investments" type="number" inputmode="decimal" value="250000" required min="0" max="10000000000" step=".01"></label>
+<label>Property and other assets (₹)<input name="property" type="number" inputmode="decimal" value="0" required min="0" max="10000000000" step=".01"></label>
+<label>Outstanding loans and other debt (₹)<input name="debt" type="number" inputmode="decimal" value="50000" required min="0" max="10000000000" step=".01"></label>
+</div>
+<button class="button calculate" type="submit">Calculate net worth</button>
+<dl class="results" aria-live="polite" aria-atomic="true">
+<div><dt>Net worth</dt><dd id="net-worth">₹3,00,000</dd></div>
+<div><dt>Total assets</dt><dd id="net-assets">₹3,50,000</dd></div>
+<div><dt>Total debt</dt><dd id="net-debt">₹50,000</dd></div>
+</dl>
+<p class="fine">Use current asset values and outstanding debt balances. Entries stay on the page during the calculation.</p>
+</form>
+<form class="calculator" id="loan-offer-comparison">
+<h3>Loan offer comparison</h3>
+<p class="section-intro">Compare two offers for the same loan amount. See how rates, terms, and upfront fees affect the EMI and total cost.</p>
+<div class="inputs"><label>Loan amount for both (₹)<input name="principal" type="number" inputmode="decimal" value="500000" required min="1" max="1000000000" step=".01"></label></div>
+<fieldset class="offer-fields">
+<legend>Offer A</legend>
+<div class="inputs">
+<label>Annual rate (%)<input name="rateA" type="number" inputmode="decimal" value="10" required min="0" max="60" step=".01"></label>
+<label>Term in months<input name="termA" type="number" inputmode="numeric" value="36" required min="1" max="600" step="1"></label>
+<label>Upfront fees (₹)<input name="feesA" type="number" inputmode="decimal" value="5000" required min="0" max="1000000000" step=".01"></label>
+</div>
+</fieldset>
+<fieldset class="offer-fields">
+<legend>Offer B</legend>
+<div class="inputs">
+<label>Annual rate (%)<input name="rateB" type="number" inputmode="decimal" value="9.5" required min="0" max="60" step=".01"></label>
+<label>Term in months<input name="termB" type="number" inputmode="numeric" value="48" required min="1" max="600" step="1"></label>
+<label>Upfront fees (₹)<input name="feesB" type="number" inputmode="decimal" value="3000" required min="0" max="1000000000" step=".01"></label>
+</div>
+</fieldset>
+<button class="button calculate" type="submit">Compare loan offers</button>
+<div id="offer-results" aria-live="polite" hidden>
+<table class="offer-results" aria-label="Loan offer estimates">
+<thead><tr><th scope="col">Estimate</th><th scope="col">Offer A</th><th scope="col">Offer B</th></tr></thead>
+<tbody>
+<tr><th scope="row">Monthly EMI</th><td id="offer-a-emi"></td><td id="offer-b-emi"></td></tr>
+<tr><th scope="row">Interest and fees</th><td id="offer-a-cost"></td><td id="offer-b-cost"></td></tr>
+<tr><th scope="row">Total paid</th><td id="offer-a-total"></td><td id="offer-b-total"></td></tr>
+</tbody>
+</table>
+<p class="offer-result" id="offer-summary"></p>
+</div>
+<p class="fine">Assumes fixed rates and monthly payments. Enter the full upfront fees for each offer, including any taxes on those fees. The comparison uses total rupees paid over each term.</p>
 </form>
 </div>
 <noscript><p class="fine">Enable JavaScript to update these estimates.</p></noscript>
@@ -448,6 +506,64 @@ byId('deposit-calculator').addEventListener('submit', (event) => {
   byId('deposit-interest').textContent = money.format(result.interest);
   byId('deposit-principal').textContent = money.format(amount);
 });
+
+function netWorth(cash, investments, property, debt) {
+  const assets = cash + investments + property;
+  return { assets, net: Math.round((assets - debt) * 100) / 100 };
+}
+
+byId('net-worth-calculator').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const fields = event.currentTarget.elements;
+  const debt = fields.namedItem('debt').valueAsNumber;
+  const result = netWorth(
+    fields.namedItem('cash').valueAsNumber,
+    fields.namedItem('investments').valueAsNumber,
+    fields.namedItem('property').valueAsNumber,
+    debt
+  );
+  byId('net-worth').textContent = preciseMoney.format(result.net);
+  byId('net-assets').textContent = preciseMoney.format(result.assets);
+  byId('net-debt').textContent = preciseMoney.format(debt);
+});
+
+function loanOffer(principal, rate, months, fees) {
+  const loan = loanPayment(principal, rate, months);
+  const totalPaise = Math.round((loan.total + fees) * 100);
+  return { monthly: loan.monthly, cost: loan.interest + fees, totalPaise };
+}
+
+const offerForm = byId('loan-offer-comparison');
+function updateOffers() {
+  const fields = offerForm.elements;
+  const principal = fields.namedItem('principal').valueAsNumber;
+  const offers = ['A', 'B'].map((label) => loanOffer(
+    principal,
+    fields.namedItem('rate' + label).valueAsNumber,
+    fields.namedItem('term' + label).valueAsNumber,
+    fields.namedItem('fees' + label).valueAsNumber
+  ));
+  offers.forEach((offer, index) => {
+    const prefix = index === 0 ? 'offer-a-' : 'offer-b-';
+    byId(prefix + 'emi').textContent = preciseMoney.format(offer.monthly);
+    byId(prefix + 'cost').textContent = preciseMoney.format(offer.cost);
+    byId(prefix + 'total').textContent = preciseMoney.format(offer.totalPaise / 100);
+  });
+  const difference = offers[0].totalPaise - offers[1].totalPaise;
+  let summary = 'Both offers have the same estimated total cost.';
+  if (difference !== 0) {
+    const cheaper = difference < 0 ? 'A' : 'B';
+    summary = 'Offer ' + cheaper + ' costs ' + preciseMoney.format(Math.abs(difference) / 100) + ' less in total.';
+  }
+  byId('offer-summary').textContent = summary;
+}
+
+offerForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  updateOffers();
+});
+if (offerForm.checkValidity()) updateOffers();
+byId('offer-results').hidden = false;
 
 const search = byId('guide-search');
 const topic = byId('guide-topic');
