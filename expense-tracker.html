@@ -22,6 +22,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .history-chart{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px}.history-chart li{display:grid;grid-template-columns:70px minmax(0,1fr) minmax(80px,auto);align-items:center;gap:8px}.history-chart strong{text-align:right;overflow-wrap:anywhere}.history-chart .selected-month{font-weight:750}.history-track{height:8px;border-radius:8px;background:#edf1e8}.history-bar{display:block;height:100%;border-radius:8px;background:#598568}.selected-month .history-bar{background:var(--green)}
 .cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
 .year-overview .ledger{margin:8px 0}.year-overview table{min-width:390px;font-size:13px}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
+.backup-tools .month-tools{margin:9px 0 0}.backup-tools .status:empty{display:none}.backup-tools input{max-width:100%;font-size:13px}
 </style>
 </head>
 <body>
@@ -77,6 +78,16 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </div>
 <div class="month-tools"><button type="button" id="export-year">Download yearly summary (CSV)</button></div>
 </details>
+<details class="spending-insights backup-tools" id="backup-tools" hidden>
+<summary>Back up or restore tracker data</summary>
+<p>A backup includes expenses, income, and savings targets across all saved months. Keep the file private. Restore adds only months without saved data in this browser.</p>
+<div class="month-tools"><button type="button" id="backup-download">Download backup (JSON)</button></div>
+<form id="backup-form" class="add-row">
+<label>Backup file<input id="backup-file" type="file" accept=".json,application/json" required></label>
+<button type="submit">Restore missing months</button>
+</form>
+<p class="status" id="backup-status" role="status"></p>
+</details>
 <div class="expense-filter" id="expense-filter" hidden>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
 <p class="status" id="filter-status" role="status"></p>
@@ -102,6 +113,8 @@ const month = byId('month');
 const status = byId('storage-status');
 const memory = new Map();
 const cashMemory = new Map();
+const expensePrefix = 'starwalt.expenses.v1.';
+const cashPrefix = 'starwalt.cashflow.v1.';
 const cashInputs = {income:byId('cash-income'),target:byId('cash-target')};
 let cashPlan;
 let selectedMonth;
@@ -139,17 +152,17 @@ function writeSaved(key, data) {
 
 function readMonth(key, fallback = defaults) {
   if (memory.has(key)) return memory.get(key);
-  const data = readSaved('starwalt.expenses.v1.' + key);
+  const data = readSaved(expensePrefix + key);
   return Object.keys(groups).every(group => Array.isArray(data?.[group])) ? data : fallback();
 }
 
 function saveMonth() {
   memory.set(selectedMonth, entries);
-  writeSaved('starwalt.expenses.v1.' + selectedMonth, entries);
+  writeSaved(expensePrefix + selectedMonth, entries);
 }
 
 function loadCashPlan() {
-  const saved = cashMemory.get(selectedMonth) ?? readSaved('starwalt.cashflow.v1.' + selectedMonth);
+  const saved = cashMemory.get(selectedMonth) ?? readSaved(cashPrefix + selectedMonth);
   cashPlan = {income:'',target:''};
   for (const [key,input] of Object.entries(cashInputs)) {
     input.value = saved?.[key] ?? '';
@@ -514,7 +527,11 @@ function yearlyCsv(summary) {
 }
 
 function downloadCsv(content, filename) {
-  const url = URL.createObjectURL(new Blob(['\uFEFF', content], {type:'text/csv;charset=utf-8'}));
+  downloadFile('\uFEFF' + content, filename, 'text/csv;charset=utf-8');
+}
+
+function downloadFile(content, filename, type) {
+  const url = URL.createObjectURL(new Blob([content], {type}));
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;
@@ -535,6 +552,138 @@ yearOverview.addEventListener('toggle', () => {
   if (yearOverview.open) renderYear();
 });
 
+const backupStatus = byId('backup-status');
+
+function isMonthKey(key) {
+  return typeof key === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(key);
+}
+
+function makeBackup() {
+  const keys = new Set([...memory.keys(), ...cashMemory.keys()]);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      for (const prefix of [expensePrefix,cashPrefix]) {
+        if (key?.startsWith(prefix)) keys.add(key.slice(prefix.length));
+      }
+    }
+  } catch {
+    // Current-session entries can still be exported without browser storage.
+  }
+  const months = [];
+  for (const month of [...keys].filter(isMonthKey).sort()) {
+    const expenses = readMonth(month, () => null);
+    const cash = cashMemory.get(month) ?? readSaved(cashPrefix + month);
+    if (expenses || cash) months.push({month, expenses, cash});
+  }
+  return {format:'starwalt-expense-tracker', version:1, months};
+}
+
+function validBackupAmount(amount) {
+  if (amount === '') return true;
+  if (typeof amount !== 'string' || !/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(amount)) return false;
+  const value = Number(amount);
+  return Number.isFinite(value) && value >= 0 && value <= 1000000000 &&
+    Math.abs(value * 100 - Math.round(value * 100)) < .0001;
+}
+
+function validateBackup(data) {
+  if (data?.format !== 'starwalt-expense-tracker' || data.version !== 1 || !Array.isArray(data.months)) {
+    throw new Error('Unrecognised backup format.');
+  }
+  const seen = new Set();
+  return data.months.map(item => {
+    if (!isMonthKey(item?.month) || seen.has(item.month) || (!item.expenses && !item.cash)) {
+      throw new Error('Invalid or repeated month in backup.');
+    }
+    seen.add(item.month);
+    let expenses = null;
+    let cash = null;
+    if (item.expenses != null) {
+      expenses = Object.fromEntries(Object.keys(groups).map(group => {
+        const rows = item.expenses[group];
+        if (!Array.isArray(rows)) throw new Error('Missing expense group.');
+        return [group, rows.map(row => {
+          if (typeof row?.name !== 'string' || !row.name.trim() || row.name.length > 60 ||
+              !validBackupAmount(row.estimated) || !validBackupAmount(row.actual)) {
+            throw new Error('Invalid expense entry in backup.');
+          }
+          return {name:row.name, estimated:row.estimated, actual:row.actual};
+        })];
+      }));
+    }
+    if (item.cash != null) {
+      if (!validBackupAmount(item.cash.income) || !validBackupAmount(item.cash.target)) {
+        throw new Error('Invalid income or savings target in backup.');
+      }
+      cash = {income:item.cash.income, target:item.cash.target};
+    }
+    return {month:item.month, expenses, cash};
+  });
+}
+
+function restoreMonths(months, storage) {
+  let restored = 0;
+  let skipped = 0;
+  for (const {month, expenses, cash} of months) {
+    const written = [];
+    try {
+      if (memory.has(month) || cashMemory.has(month) ||
+          storage.getItem(expensePrefix + month) !== null || storage.getItem(cashPrefix + month) !== null) {
+        skipped++;
+        continue;
+      }
+      for (const [prefix,data] of [[expensePrefix,expenses],[cashPrefix,cash]]) {
+        if (data === null) continue;
+        const key = prefix + month;
+        storage.setItem(key, JSON.stringify(data));
+        written.push(key);
+      }
+      restored++;
+    } catch {
+      for (const key of written) storage.removeItem(key);
+      return {restored,skipped,failed:true};
+    }
+  }
+  return {restored,skipped,failed:false};
+}
+
+byId('backup-download').addEventListener('click', () => {
+  const backup = makeBackup();
+  if (backup.months.length === 0) {
+    backupStatus.textContent = 'There are no saved months to back up yet.';
+    return;
+  }
+  downloadFile(JSON.stringify(backup, null, 2), 'starwalt-expense-backup.json', 'application/json');
+  backupStatus.textContent = 'Backup prepared for ' + backup.months.length + (backup.months.length === 1 ? ' month.' : ' months.');
+});
+
+byId('backup-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const fileInput = byId('backup-file');
+  const file = fileInput.files[0];
+  if (!file) return;
+  let months;
+  try {
+    months = validateBackup(JSON.parse(await file.text()));
+  } catch {
+    backupStatus.textContent = 'This file is not a valid Starwalt backup. No months were changed.';
+    return;
+  }
+  let result;
+  try {
+    result = restoreMonths(months, localStorage);
+  } catch {
+    backupStatus.textContent = 'Browser storage is unavailable. Restore could not finish.';
+    return;
+  }
+  selectMonth();
+  fileInput.value = '';
+  backupStatus.textContent = 'Restored ' + result.restored + (result.restored === 1 ? ' month. ' : ' months. ') +
+    (result.skipped ? 'Skipped ' + result.skipped + (result.skipped === 1 ? ' existing month. ' : ' existing months. ') : '') +
+    (result.failed ? 'Browser storage could not save the remaining months.' : '');
+});
+
 const today = new Date();
 month.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2,'0');
 month.addEventListener('change', selectMonth);
@@ -545,12 +694,13 @@ byId('expense-filter').hidden = false;
 byId('spending-insights').hidden = false;
 byId('cash-flow').hidden = false;
 yearOverview.hidden = false;
+byId('backup-tools').hidden = false;
 for (const [key,input] of Object.entries(cashInputs)) {
   input.addEventListener('input', () => {
     if (!input.validity.valid) return;
     cashPlan[key] = input.value;
     cashMemory.set(selectedMonth, cashPlan);
-    writeSaved('starwalt.cashflow.v1.' + selectedMonth, cashPlan);
+    writeSaved(cashPrefix + selectedMonth, cashPlan);
     updateTotals();
   });
   input.addEventListener('blur', () => {
