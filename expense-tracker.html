@@ -21,6 +21,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .spending-insights{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 15px}.spending-insights[hidden]{display:none}.spending-insights summary{font-weight:750;color:var(--green);cursor:pointer}.spending-insights h3{font-size:14px;margin:12px 0 5px}.spending-insights p{margin:4px 0;color:var(--muted);font-size:13px}
 .history-chart{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px}.history-chart li{display:grid;grid-template-columns:70px minmax(0,1fr) minmax(80px,auto);align-items:center;gap:8px}.history-chart strong{text-align:right;overflow-wrap:anywhere}.history-chart .selected-month{font-weight:750}.history-track{height:8px;border-radius:8px;background:#edf1e8}.history-bar{display:block;height:100%;border-radius:8px;background:#598568}.selected-month .history-bar{background:var(--green)}
 .cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
+.year-overview .ledger{margin:8px 0}.year-overview table{min-width:390px;font-size:13px}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
 </style>
 </head>
 <body>
@@ -64,6 +65,18 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <h3>Where this month’s spending went</h3>
 <p id="group-breakdown"></p>
 </details>
+<details class="spending-insights year-overview" id="year-overview" hidden>
+<summary>Yearly expense summary</summary>
+<p id="year-note"></p>
+<div class="ledger" role="region" aria-label="Yearly expense totals by month" tabindex="0">
+<table aria-label="Yearly expense summary">
+<thead><tr><th scope="col">Month</th><th scope="col">Estimated</th><th scope="col">Actual</th><th scope="col">Difference</th></tr></thead>
+<tbody id="year-months"></tbody>
+<tfoot><tr class="subtotal"><th scope="row">Year total</th><td id="year-estimated"></td><td id="year-actual"></td><td id="year-difference"></td></tr></tfoot>
+</table>
+</div>
+<div class="month-tools"><button type="button" id="export-year">Download yearly summary (CSV)</button></div>
+</details>
 <div class="expense-filter" id="expense-filter" hidden>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
 <p class="status" id="filter-status" role="status"></p>
@@ -96,6 +109,7 @@ let entries;
 let actualHistory;
 const monthLabel = new Intl.DateTimeFormat('en-IN', {month:'long',year:'numeric',timeZone:'UTC'});
 const overBudgetOnly = byId('over-budget-only');
+const yearOverview = byId('year-overview');
 const historyLabel = new Intl.DateTimeFormat('en-IN', {month:'short',year:'numeric',timeZone:'UTC'});
 const shareFormat = new Intl.NumberFormat('en-IN', {style:'percent',maximumFractionDigits:1});
 
@@ -268,6 +282,7 @@ function updateTotals() {
     monthLabel.format(new Date(prior.key + '-01T00:00:00Z')));
   updateSpendingInsights(currentActual, groupActuals);
   updateCashFlow(estimated, actual);
+  if (yearOverview.open) renderYear();
 }
 
 function render() {
@@ -435,15 +450,89 @@ byId('copy-estimates').addEventListener('click', () => {
   action.textContent = copied + (copied === 1 ? ' estimate copied. ' : ' estimates copied. ') + 'Existing estimates and actuals were kept.';
 });
 
-byId('export-expenses').addEventListener('click', () => {
-  const url = URL.createObjectURL(new Blob(['\uFEFF', expenseCsv(selectedMonth, entries)], {type:'text/csv;charset=utf-8'}));
+function monthlyAmounts(data) {
+  const amounts = {estimated:null, actual:null};
+  for (const group of Object.keys(groups)) {
+    for (const row of data?.[group] ?? []) {
+      for (const field of ['estimated','actual']) {
+        if (row[field] !== '') amounts[field] = (amounts[field] ?? 0) + paise(row[field]);
+      }
+    }
+  }
+  return amounts;
+}
+
+function yearSummary() {
+  const year = selectedMonth.slice(0,4);
+  const totals = {estimated:null, actual:null};
+  const months = [];
+  for (let number = 1; number <= 12; number++) {
+    const key = year + '-' + String(number).padStart(2,'0');
+    const amounts = monthlyAmounts(key === selectedMonth ? entries : readMonth(key, () => null));
+    for (const field of ['estimated','actual']) {
+      if (amounts[field] !== null) totals[field] = (totals[field] ?? 0) + amounts[field];
+    }
+    months.push({key, ...amounts});
+  }
+  return {year, months, totals};
+}
+
+function budgetDifference(estimated, actual) {
+  return estimated === null && actual === null ? null : (estimated ?? 0) - (actual ?? 0);
+}
+
+function renderYear() {
+  const {year, months, totals} = yearSummary();
+  byId('year-note').textContent = 'Calendar year ' + year + '. A dash means no amount was entered.';
+  const rows = document.createDocumentFragment();
+  for (const {key, estimated, actual} of months) {
+    const row = document.createElement('tr');
+    if (key === selectedMonth) row.setAttribute('aria-current','true');
+    appendText(row,'th',historyLabel.format(new Date(key + '-01T00:00:00Z'))).scope = 'row';
+    for (const amount of [estimated,actual]) {
+      appendText(row,'td',amount === null ? '—' : money.format(amount / 100));
+    }
+    difference(appendText(row,'td',''), budgetDifference(estimated,actual));
+    rows.append(row);
+  }
+  byId('year-months').replaceChildren(rows);
+  byId('year-estimated').textContent = totals.estimated === null ? '—' : money.format(totals.estimated / 100);
+  byId('year-actual').textContent = totals.actual === null ? '—' : money.format(totals.actual / 100);
+  difference(byId('year-difference'), budgetDifference(totals.estimated,totals.actual));
+}
+
+function yearlyCsv(summary) {
+  const format = (value) => value === null ? '' : (value / 100).toFixed(2);
+  const row = (label, {estimated, actual}) => [
+    label, format(estimated), format(actual), format(budgetDifference(estimated,actual))
+  ].join(',');
+  return [
+    'Month,Estimated (INR),Actual (INR),Difference (INR)',
+    ...summary.months.map(amounts => row(amounts.key, amounts)),
+    row('Year total', summary.totals)
+  ].join('\r\n') + '\r\n';
+}
+
+function downloadCsv(content, filename) {
+  const url = URL.createObjectURL(new Blob(['\uFEFF', content], {type:'text/csv;charset=utf-8'}));
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'starwalt-expenses-' + selectedMonth + '.csv';
+  link.download = filename;
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+byId('export-expenses').addEventListener('click', () => {
+  downloadCsv(expenseCsv(selectedMonth, entries), 'starwalt-expenses-' + selectedMonth + '.csv');
+});
+byId('export-year').addEventListener('click', () => {
+  const summary = yearSummary();
+  downloadCsv(yearlyCsv(summary), 'starwalt-expense-summary-' + summary.year + '.csv');
+});
+yearOverview.addEventListener('toggle', () => {
+  if (yearOverview.open) renderYear();
 });
 
 const today = new Date();
@@ -455,6 +544,7 @@ byId('month-comparison').hidden = false;
 byId('expense-filter').hidden = false;
 byId('spending-insights').hidden = false;
 byId('cash-flow').hidden = false;
+yearOverview.hidden = false;
 for (const [key,input] of Object.entries(cashInputs)) {
   input.addEventListener('input', () => {
     if (!input.validity.valid) return;
