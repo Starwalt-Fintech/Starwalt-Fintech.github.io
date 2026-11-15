@@ -20,6 +20,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .expense-filter{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin:0 0 8px}.expense-filter label{font-weight:650}.expense-filter input{accent-color:var(--green);margin-right:6px}
 .spending-insights{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 15px}.spending-insights[hidden]{display:none}.spending-insights summary{font-weight:750;color:var(--green);cursor:pointer}.spending-insights h3{font-size:14px;margin:12px 0 5px}.spending-insights p{margin:4px 0;color:var(--muted);font-size:13px}
 .history-chart{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px}.history-chart li{display:grid;grid-template-columns:70px minmax(0,1fr) minmax(80px,auto);align-items:center;gap:8px}.history-chart strong{text-align:right;overflow-wrap:anywhere}.history-chart .selected-month{font-weight:750}.history-track{height:8px;border-radius:8px;background:#edf1e8}.history-bar{display:block;height:100%;border-radius:8px;background:#598568}.selected-month .history-bar{background:var(--green)}
+.cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
 </style>
 </head>
 <body>
@@ -38,6 +39,19 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <div><dt>Total actual</dt><dd id="actual-total">₹0</dd></div>
 <div id="difference-card"><dt>Difference</dt><dd id="difference-total">₹0</dd></div>
 </dl>
+<section class="cash-flow" id="cash-flow" aria-labelledby="cash-heading" hidden>
+<h2 id="cash-heading">Monthly cash flow and savings goal</h2>
+<p class="note">Use your take-home income and the expenses recorded for this month.</p>
+<div class="cash-inputs">
+<label>Take-home income (₹)<input class="amount" type="number" inputmode="decimal" id="cash-income" min="0" max="1000000000" step=".01"></label>
+<label>Savings target (₹)<input class="amount" type="number" inputmode="decimal" id="cash-target" min="0" max="1000000000" step=".01"></label>
+</div>
+<dl class="totals" aria-label="Cash flow summary">
+<div id="cash-planned-card"><dt>Left after estimates</dt><dd id="cash-planned">—</dd></div>
+<div id="cash-actual-card"><dt>Left after actuals</dt><dd id="cash-actual">—</dd></div>
+<div id="cash-goal-card"><dt id="cash-goal-label">Savings target</dt><dd id="cash-goal">—</dd></div>
+</dl>
+</section>
 <section class="tracking-summary" id="month-comparison" aria-labelledby="comparison-heading" hidden>
 <h2 id="comparison-heading">Spending compared with last month</h2>
 <p id="comparison-text"></p>
@@ -74,6 +88,9 @@ const money = new Intl.NumberFormat('en-IN', {style:'currency',currency:'INR',mi
 const month = byId('month');
 const status = byId('storage-status');
 const memory = new Map();
+const cashMemory = new Map();
+const cashInputs = {income:byId('cash-income'),target:byId('cash-target')};
+let cashPlan;
 let selectedMonth;
 let entries;
 let actualHistory;
@@ -88,27 +105,42 @@ function defaults() {
   ]));
 }
 
-function readMonth(key, fallback = defaults) {
-  if (memory.has(key)) return memory.get(key);
+function readSaved(key) {
   try {
-    const saved = localStorage.getItem('starwalt.expenses.v1.' + key);
-    if (saved) {
-      const data = JSON.parse(saved);
-      if (Object.keys(groups).every(group => Array.isArray(data?.[group]))) return data;
-    }
+    return JSON.parse(localStorage.getItem(key));
+  } catch {
+    status.textContent = 'Browser storage is unavailable. Entries last until you close or reload this page.';
+    return null;
+  }
+}
+
+function writeSaved(key, data) {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+    if (status.textContent !== 'Saved in this browser.') status.textContent = 'Saved in this browser.';
   } catch {
     status.textContent = 'Browser storage is unavailable. Entries last until you close or reload this page.';
   }
-  return fallback();
+}
+
+function readMonth(key, fallback = defaults) {
+  if (memory.has(key)) return memory.get(key);
+  const data = readSaved('starwalt.expenses.v1.' + key);
+  return Object.keys(groups).every(group => Array.isArray(data?.[group])) ? data : fallback();
 }
 
 function saveMonth() {
   memory.set(selectedMonth, entries);
-  try {
-    localStorage.setItem('starwalt.expenses.v1.' + selectedMonth, JSON.stringify(entries));
-    if (status.textContent !== 'Saved in this browser.') status.textContent = 'Saved in this browser.';
-  } catch {
-    status.textContent = 'Browser storage is unavailable. Entries last until you close or reload this page.';
+  writeSaved('starwalt.expenses.v1.' + selectedMonth, entries);
+}
+
+function loadCashPlan() {
+  const saved = cashMemory.get(selectedMonth) ?? readSaved('starwalt.cashflow.v1.' + selectedMonth);
+  cashPlan = {income:'',target:''};
+  for (const [key,input] of Object.entries(cashInputs)) {
+    input.value = saved?.[key] ?? '';
+    cashPlan[key] = input.validity.valid ? input.value : '';
+    input.value = cashPlan[key];
   }
 }
 
@@ -189,6 +221,23 @@ function updateSpendingInsights(current, groupActuals) {
   ).join(' · ');
 }
 
+function updateCashFlow(estimated, actual) {
+  const income = cashPlan.income === '' ? null : paise(cashPlan.income);
+  const planned = income === null ? null : income - estimated;
+  const remaining = income === null ? null : income - actual;
+  const goal = cashPlan.target === '' || remaining === null ? null : remaining - paise(cashPlan.target);
+
+  difference(byId('cash-planned-card'), planned, byId('cash-planned'));
+  difference(byId('cash-actual-card'), remaining, byId('cash-actual'));
+  let goalLabel = 'Savings target';
+  if (goal !== null) {
+    goalLabel = goal < 0 ? 'Short of target' : goal > 0 ? 'Above target' : 'Target met';
+  }
+  byId('cash-goal-label').textContent = goalLabel;
+  difference(byId('cash-goal-card'), goal, byId('cash-goal'));
+  if (goal !== null && goal < 0) byId('cash-goal').textContent = money.format(-goal / 100);
+}
+
 function updateTotals() {
   let estimated = 0;
   let actual = 0;
@@ -218,6 +267,7 @@ function updateTotals() {
   byId('comparison-text').textContent = describeComparison(currentActual, prior.actual,
     monthLabel.format(new Date(prior.key + '-01T00:00:00Z')));
   updateSpendingInsights(currentActual, groupActuals);
+  updateCashFlow(estimated, actual);
 }
 
 function render() {
@@ -295,6 +345,7 @@ function selectMonth() {
   byId('month-action').textContent = '';
   selectedMonth = month.value;
   entries = readMonth(selectedMonth);
+  loadCashPlan();
   let key = selectedMonth;
   actualHistory = [];
   for (let offset = 1; offset <= 5; offset++) {
@@ -403,6 +454,22 @@ byId('month-tools').hidden = false;
 byId('month-comparison').hidden = false;
 byId('expense-filter').hidden = false;
 byId('spending-insights').hidden = false;
+byId('cash-flow').hidden = false;
+for (const [key,input] of Object.entries(cashInputs)) {
+  input.addEventListener('input', () => {
+    if (!input.validity.valid) return;
+    cashPlan[key] = input.value;
+    cashMemory.set(selectedMonth, cashPlan);
+    writeSaved('starwalt.cashflow.v1.' + selectedMonth, cashPlan);
+    updateTotals();
+  });
+  input.addEventListener('blur', () => {
+    if (!input.validity.valid) {
+      input.reportValidity();
+      input.value = cashPlan[key];
+    }
+  });
+}
 overBudgetOnly.addEventListener('change', applyExpenseFilter);
 
 byId('add-row').addEventListener('submit', (event) => {
