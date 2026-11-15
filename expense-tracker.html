@@ -18,6 +18,8 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .tracking-summary{margin:0 0 16px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:8px}.tracking-summary[hidden],.expense-filter[hidden]{display:none}
 .tracking-summary h2{font-size:15px;margin:0 0 3px}.tracking-summary p{font-size:14px;margin:0;color:var(--muted)}
 .expense-filter{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin:0 0 8px}.expense-filter label{font-weight:650}.expense-filter input{accent-color:var(--green);margin-right:6px}
+.spending-insights{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 15px}.spending-insights[hidden]{display:none}.spending-insights summary{font-weight:750;color:var(--green);cursor:pointer}.spending-insights h3{font-size:14px;margin:12px 0 5px}.spending-insights p{margin:4px 0;color:var(--muted);font-size:13px}
+.history-chart{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px}.history-chart li{display:grid;grid-template-columns:70px minmax(0,1fr) minmax(80px,auto);align-items:center;gap:8px}.history-chart strong{text-align:right;overflow-wrap:anywhere}.history-chart .selected-month{font-weight:750}.history-track{height:8px;border-radius:8px;background:#edf1e8}.history-bar{display:block;height:100%;border-radius:8px;background:#598568}.selected-month .history-bar{background:var(--green)}
 </style>
 </head>
 <body>
@@ -40,6 +42,14 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <h2 id="comparison-heading">Spending compared with last month</h2>
 <p id="comparison-text"></p>
 </section>
+<details class="spending-insights" id="spending-insights" hidden>
+<summary>Spending history and breakdown</summary>
+<h3>Actual spending over six months</h3>
+<p>Includes the selected month and its five preceding months.</p>
+<ul class="history-chart" id="spending-history" aria-label="Actual spending by month"></ul>
+<h3>Where this month’s spending went</h3>
+<p id="group-breakdown"></p>
+</details>
 <div class="expense-filter" id="expense-filter" hidden>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
 <p class="status" id="filter-status" role="status"></p>
@@ -66,9 +76,11 @@ const status = byId('storage-status');
 const memory = new Map();
 let selectedMonth;
 let entries;
-let lastMonthActual;
+let actualHistory;
 const monthLabel = new Intl.DateTimeFormat('en-IN', {month:'long',year:'numeric',timeZone:'UTC'});
 const overBudgetOnly = byId('over-budget-only');
+const historyLabel = new Intl.DateTimeFormat('en-IN', {month:'short',year:'numeric',timeZone:'UTC'});
+const shareFormat = new Intl.NumberFormat('en-IN', {style:'percent',maximumFractionDigits:1});
 
 function defaults() {
   return Object.fromEntries(Object.entries(groups).map(([key,group]) => [
@@ -100,7 +112,7 @@ function saveMonth() {
   }
 }
 
-function addCell(row, tag, value) {
+function appendText(row, tag, value) {
   const cell = document.createElement(tag);
   cell.textContent = value;
   row.append(cell);
@@ -145,9 +157,42 @@ function applyExpenseFilter() {
     : '';
 }
 
+function updateSpendingInsights(current, groupActuals) {
+  const months = [...actualHistory, {key:selectedMonth, actual:current}];
+  const peak = Math.max(1, ...months.map(({actual}) => actual ?? 0));
+  const items = document.createDocumentFragment();
+  for (const {key, actual} of months) {
+    const item = document.createElement('li');
+    if (key === selectedMonth) {
+      item.className = 'selected-month';
+      item.setAttribute('aria-current', 'true');
+    }
+    appendText(item, 'span', historyLabel.format(new Date(key + '-01T00:00:00Z')));
+    const track = appendText(item, 'span', '');
+    track.className = 'history-track';
+    track.setAttribute('aria-hidden', 'true');
+    const bar = appendText(track, 'span', '');
+    bar.className = 'history-bar';
+    bar.style.width = 100 * (actual ?? 0) / peak + '%';
+    appendText(item, 'strong', actual === null ? 'No entries' : money.format(actual / 100));
+    items.append(item);
+  }
+  byId('spending-history').replaceChildren(items);
+  const breakdown = byId('group-breakdown');
+  if (!current) {
+    breakdown.textContent = current === 0 ? 'Recorded spending is ₹0.' : 'Enter actual amounts to see the breakdown.';
+    return;
+  }
+  breakdown.textContent = Object.entries(groups).map(([key, group]) =>
+    group.name + ' ' + money.format(groupActuals[key] / 100) +
+    ' (' + shareFormat.format(groupActuals[key] / current) + ')'
+  ).join(' · ');
+}
+
 function updateTotals() {
   let estimated = 0;
   let actual = 0;
+  const groupActuals = {};
   for (const key of Object.keys(groups)) {
     let groupEstimated = 0;
     let groupActual = 0;
@@ -163,13 +208,16 @@ function updateTotals() {
     difference(byId(key + '-difference'), groupEstimated - groupActual);
     estimated += groupEstimated;
     actual += groupActual;
+    groupActuals[key] = groupActual;
   }
   byId('estimated-total').textContent = money.format(estimated / 100);
   byId('actual-total').textContent = money.format(actual / 100);
   difference(byId('difference-card'), estimated - actual, byId('difference-total'));
   const currentActual = Object.values(entries).some(group => group.some(row => row.actual !== '')) ? actual : null;
-  byId('comparison-text').textContent = describeComparison(currentActual, lastMonthActual,
-    monthLabel.format(new Date(previousMonth(selectedMonth) + '-01T00:00:00Z')));
+  const prior = actualHistory.at(-1);
+  byId('comparison-text').textContent = describeComparison(currentActual, prior.actual,
+    monthLabel.format(new Date(prior.key + '-01T00:00:00Z')));
+  updateSpendingInsights(currentActual, groupActuals);
 }
 
 function render() {
@@ -178,13 +226,13 @@ function render() {
     body.replaceChildren();
     const heading = body.insertRow();
     heading.className = 'group';
-    const groupCell = addCell(heading, 'th', group.name);
+    const groupCell = appendText(heading, 'th', group.name);
     groupCell.colSpan = 5;
     groupCell.scope = 'rowgroup';
     entries[key].forEach((entry,index) => {
       const row = body.insertRow();
       row.className = 'entry';
-      addCell(row, 'th', entry.name).scope = 'row';
+      appendText(row, 'th', entry.name).scope = 'row';
       for (const field of ['estimated','actual']) {
         const input = document.createElement('input');
         input.type = 'number';
@@ -229,7 +277,7 @@ function render() {
     });
     const subtotal = body.insertRow();
     subtotal.className = 'subtotal';
-    addCell(subtotal, 'th', group.name + ' subtotal').scope = 'row';
+    appendText(subtotal, 'th', group.name + ' subtotal').scope = 'row';
     for (const kind of ['estimated','actual','difference']) {
       subtotal.insertCell().id = key + '-' + kind;
     }
@@ -240,14 +288,19 @@ function render() {
 }
 
 function selectMonth() {
-  if (!/^\d{4}-\d{2}$/.test(month.value)) {
+  if (!month.validity.valid || !/^\d{4}-\d{2}$/.test(month.value)) {
     month.value = selectedMonth;
     return;
   }
   byId('month-action').textContent = '';
   selectedMonth = month.value;
   entries = readMonth(selectedMonth);
-  lastMonthActual = recordedActual(readMonth(previousMonth(selectedMonth), () => null));
+  let key = selectedMonth;
+  actualHistory = [];
+  for (let offset = 1; offset <= 5; offset++) {
+    key = previousMonth(key);
+    actualHistory.unshift({key, actual:recordedActual(readMonth(key, () => null))});
+  }
   render();
 }
 
@@ -349,6 +402,7 @@ selectMonth();
 byId('month-tools').hidden = false;
 byId('month-comparison').hidden = false;
 byId('expense-filter').hidden = false;
+byId('spending-insights').hidden = false;
 overBudgetOnly.addEventListener('change', applyExpenseFilter);
 
 byId('add-row').addEventListener('submit', (event) => {
