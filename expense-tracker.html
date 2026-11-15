@@ -25,6 +25,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .backup-tools .month-tools{margin:9px 0 0}.backup-tools .status:empty{display:none}.backup-tools input{max-width:100%;font-size:13px}
 .expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
 .rename-dialog{border:1px solid var(--line);border-radius:12px;padding:18px;width:min(390px,calc(100% - 28px));color:var(--ink)}.rename-dialog::backdrop{background:#10252288}.rename-dialog h2{font-size:19px;margin:0 0 8px}.rename-dialog .add-row{margin:0}.rename-dialog .add-row label{width:100%}.rename-dialog .add-row button[type=button]{background:#edf1e8;color:var(--ink)}
+.month-switcher{display:flex;flex-wrap:wrap;gap:6px}.month-switcher[hidden]{display:none}.month-switcher button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:5px 9px;font-size:13px;font-weight:700}.month-switcher button:hover{background:#e8efdd}.overruns{font-size:13px;margin:4px 0 0;padding-left:22px}.overruns li{padding:2px 0}.overruns strong{color:#982d26}.overruns span{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -32,7 +33,10 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <main class="wrap">
 <h1>Household Monthly Expense Tracker</h1>
 <p class="intro">Enter what you planned to spend and what you actually spent. A negative difference means you went over budget.</p>
-<div class="controls"><label>Month <input type="month" id="month" required></label><p id="storage-status" class="status" role="status">Saved in this browser.</p></div>
+<div class="controls"><label>Month <input type="month" id="month" required></label>
+<div class="month-switcher" id="month-switcher" role="group" aria-label="Month shortcuts" hidden>
+<button type="button" id="go-previous">Previous month</button><button type="button" id="go-current">Current month</button><button type="button" id="go-next">Next month</button>
+</div><p id="storage-status" class="status" role="status">Saved in this browser.</p></div>
 <div class="month-tools" id="month-tools" hidden>
 <button type="button" id="copy-estimates">Reuse last month’s estimates</button>
 <button type="button" id="export-expenses">Download month (CSV)</button>
@@ -67,6 +71,9 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <ul class="history-chart" id="spending-history" aria-label="Actual spending by month"></ul>
 <h3>Where this month’s spending went</h3>
 <p id="group-breakdown"></p>
+<h3>Biggest budget overruns</h3>
+<p id="overrun-empty">No over-budget expenses this month.</p>
+<ol class="overruns" id="overrun-list" aria-label="Top three over-budget expenses"></ol>
 </details>
 <details class="spending-insights year-overview" id="year-overview" hidden>
 <summary>Yearly expense summary</summary>
@@ -312,10 +319,24 @@ function updateCashFlow(estimated, actual) {
   if (goal !== null && goal < 0) byId('cash-goal').textContent = money.format(-goal / 100);
 }
 
+function renderOverruns(overruns) {
+  const top = overruns.sort((left,right) => right.amount - left.amount).slice(0,3);
+  const items = document.createDocumentFragment();
+  for (const {name, group, amount} of top) {
+    const item = document.createElement('li');
+    appendText(item,'strong',money.format(amount / 100) + ' over');
+    appendText(item,'span',' · ' + name + ' (' + group + ')');
+    items.append(item);
+  }
+  byId('overrun-list').replaceChildren(items);
+  byId('overrun-empty').hidden = top.length > 0;
+}
+
 function updateTotals() {
   let estimated = 0;
   let actual = 0;
   const groupActuals = {};
+  const overruns = [];
   for (const key of Object.keys(groups)) {
     let groupEstimated = 0;
     let groupActual = 0;
@@ -324,6 +345,7 @@ function updateTotals() {
       const spent = paise(entry.actual);
       groupEstimated += planned;
       groupActual += spent;
+      if (spent > planned) overruns.push({name:entry.name, group:groups[key].name, amount:spent - planned});
       difference(byId(key + '-difference-' + index), entry.estimated || entry.actual ? planned - spent : null);
     });
     byId(key + '-estimated').textContent = money.format(groupEstimated / 100);
@@ -341,6 +363,7 @@ function updateTotals() {
   byId('comparison-text').textContent = describeComparison(currentActual, prior.actual,
     monthLabel.format(new Date(prior.key + '-01T00:00:00Z')));
   updateSpendingInsights(currentActual, groupActuals);
+  renderOverruns(overruns);
   updateCashFlow(estimated, actual);
   if (yearOverview.open) renderYear();
 }
@@ -440,9 +463,24 @@ function selectMonth() {
 }
 
 function previousMonth(key) {
+  return shiftMonth(key, -1);
+}
+
+function shiftMonth(key, change) {
   const [year, number] = key.split('-').map(Number);
-  return number === 1 ? String(year - 1).padStart(4, '0') + '-12' :
-    String(year).padStart(4, '0') + '-' + String(number - 1).padStart(2, '0');
+  const index = year * 12 + number - 1 + change;
+  const shiftedYear = Math.floor(index / 12);
+  return String(shiftedYear).padStart(4,'0') + '-' + String(index - shiftedYear * 12 + 1).padStart(2,'0');
+}
+
+function currentMonthKey() {
+  const today = new Date();
+  return today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2,'0');
+}
+
+function goToMonth(key) {
+  month.value = key;
+  selectMonth();
 }
 
 function reuseEstimates(current, previous) {
@@ -740,10 +778,12 @@ byId('backup-form').addEventListener('submit', async (event) => {
     (result.failed ? 'Browser storage could not save the remaining months.' : '');
 });
 
-const today = new Date();
-month.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2,'0');
 month.addEventListener('change', selectMonth);
-selectMonth();
+goToMonth(currentMonthKey());
+byId('go-previous').addEventListener('click', () => goToMonth(shiftMonth(selectedMonth,-1)));
+byId('go-current').addEventListener('click', () => goToMonth(currentMonthKey()));
+byId('go-next').addEventListener('click', () => goToMonth(shiftMonth(selectedMonth,1)));
+byId('month-switcher').hidden = false;
 byId('month-tools').hidden = false;
 byId('month-comparison').hidden = false;
 byId('expense-filter').hidden = false;
