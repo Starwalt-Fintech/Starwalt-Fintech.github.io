@@ -35,6 +35,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .expense-method{display:block;font-size:12px;font-weight:650;color:var(--green)}
 .rename-dialog textarea{box-sizing:border-box;width:100%;resize:vertical;padding:7px;border:1px solid #a9b7a8;border-radius:6px;font:inherit;color:var(--ink)}
 .method-breakdown{list-style:none;margin:4px 0;padding:0;font-size:13px}.method-breakdown li{display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px solid var(--line)}
+.tracker-filter-select{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:13px;font-weight:650}.tracker-filter-select select,.clear-expense-filters{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:5px 8px}.clear-expense-filters{font-size:13px;font-weight:700}.clear-expense-filters:hover{background:#e8efdd}.bill-schedule .tracker-filter-select{margin-top:7px}
 </style>
 </head>
 <body>
@@ -112,7 +113,12 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </details>
 <details class="spending-insights bill-schedule" id="bill-schedule" hidden>
 <summary>Bill schedule</summary>
+<label class="tracker-filter-select">Bill status<select id="bill-status-filter">
+<option value="all">All bills</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option>
+<option value="soon">Due within 7 days</option><option value="paid">Paid</option>
+</select></label>
 <p id="bill-schedule-total"></p>
+<p id="bill-filter-result" role="status"></p>
 <p>Shows dated expenses in the selected tracker month. Totals use actual amounts when entered and estimates otherwise.</p>
 <div class="ledger" id="bill-schedule-grid" role="region" aria-label="Bill schedule" tabindex="0" hidden>
 <table aria-label="Bills ordered by due date">
@@ -126,6 +132,10 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
 <label><input type="checkbox" id="unpaid-only">Show unpaid expenses only</label>
 <label><input type="checkbox" id="overdue-only">Show overdue expenses only</label>
+<label class="tracker-filter-select">Filter by payment method<select id="expense-method-filter">
+<option value="all">All methods</option><option value="">Unspecified</option>
+</select></label>
+<button type="button" class="clear-expense-filters" id="clear-expense-filters">Clear expense filters</button>
 <p class="status" id="filter-status" role="status"></p>
 </div>
 <p class="payment-progress" id="payment-progress" hidden></p>
@@ -186,11 +196,16 @@ const paymentMethods = new Map([
   ['bank-transfer','Bank transfer'],
   ['other','Other']
 ]);
-for (const [value,label] of paymentMethods) expenseMethod.add(new Option(label,value));
+const expenseMethodFilter = byId('expense-method-filter');
+for (const [value,label] of paymentMethods) {
+  expenseMethod.add(new Option(label,value));
+  expenseMethodFilter.add(new Option(label,value));
+}
 const removedByMonth = new Map();
 let renameTarget;
 const yearOverview = byId('year-overview');
 const billSchedule = byId('bill-schedule');
+const billStatusFilter = byId('bill-status-filter');
 const billDateFormat = new Intl.DateTimeFormat('en-IN', {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
 const historyLabel = new Intl.DateTimeFormat('en-IN', {month:'short',year:'numeric',timeZone:'UTC'});
 const shareFormat = new Intl.NumberFormat('en-IN', {style:'percent',maximumFractionDigits:1});
@@ -275,16 +290,19 @@ function describeComparison(current, previous, priorLabel) {
 
 function applyExpenseFilter() {
   const query = expenseSearch.value.trim().toLowerCase();
+  const method = expenseMethodFilter.value;
   let count = 0;
   for (const row of document.querySelectorAll('.entry')) {
     const isOverBudget = row.querySelector('.difference').classList.contains('negative');
     const matchesExpense = row.dataset.searchText.includes(query);
     const matchesPayment = !unpaidOnly.checked || row.classList.contains('payment-pending');
     const matchesDue = !overdueOnly.checked || row.classList.contains('payment-overdue');
-    row.hidden = !matchesExpense || !matchesPayment || !matchesDue || (overBudgetOnly.checked && !isOverBudget);
+    const matchesMethod = method === 'all' || row.dataset.paymentMethod === method;
+    row.hidden = !matchesExpense || !matchesPayment || !matchesDue || !matchesMethod ||
+      (overBudgetOnly.checked && !isOverBudget);
     if (!row.hidden) count++;
   }
-  byId('filter-status').textContent = query || overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked
+  byId('filter-status').textContent = query || method !== 'all' || overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked
     ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
 }
@@ -443,9 +461,21 @@ function billAmount(entry) {
   return amount === '' ? null : paise(amount);
 }
 
+function matchesBillStatus(filter, paid, dueStatus) {
+  switch (filter) {
+    case 'paid': return paid;
+    case 'unpaid': return !paid;
+    case 'overdue': return dueStatus === 'Overdue';
+    case 'soon': return dueStatus === 'Due today' || dueStatus === 'Due soon';
+    default: return true;
+  }
+}
+
 function renderBillSchedule() {
   const bills = datedBills(entries);
+  const filter = billStatusFilter.value;
   let pending = 0;
+  let shown = 0;
   let unknown = 0;
   let sum = 0;
   const today = new Date();
@@ -461,12 +491,14 @@ function renderBillSchedule() {
       if (amount === null) unknown++;
       else sum += amount;
     }
+    const state = dueState(entry,todayKey,soon);
+    if (!matchesBillStatus(filter,paid,state)) continue;
+    shown++;
     const row = document.createElement('tr');
     const name = appendText(row,'th',entry.name);
     name.scope = 'row';
     appendText(name,'small',groups[key].name).className = 'bill-status';
     const dateCell = appendText(row,'td',billDateFormat.format(new Date(entry.dueDate + 'T00:00:00Z')));
-    const state = dueState(entry,todayKey,soon);
     if (state) appendText(dateCell,'small',state).className = 'bill-status';
     appendText(row,'td',amount === null ? '—' : money.format(amount / 100));
     const cell = appendText(row,'td','');
@@ -477,7 +509,7 @@ function renderBillSchedule() {
     button.setAttribute('aria-label', (paid ? 'Mark unpaid: ' : 'Mark paid: ') + entry.name);
     button.addEventListener('click', () => {
       setBillPaid(entry,key,index,!paid);
-      byId(actionId).focus();
+      (byId(actionId) ?? billStatusFilter).focus();
     });
     rows.append(row);
   }
@@ -490,7 +522,10 @@ function renderBillSchedule() {
       (unknown ? ' · ' + unknown + ' without an amount' : '');
   }
   byId('bill-schedule-rows').replaceChildren(rows);
-  byId('bill-schedule-grid').hidden = bills.length === 0;
+  byId('bill-filter-result').textContent = !bills.length || filter === 'all' ? '' : shown
+    ? 'Showing ' + shown + ' of ' + bills.length + ' dated bills.'
+    : 'No bills match this status.';
+  byId('bill-schedule-grid').hidden = shown === 0;
 }
 
 function setBillPaid(entry,key,index,paid) {
@@ -606,6 +641,7 @@ function render() {
       if (method) appendText(nameCell,'span',method).className = 'expense-method';
       if (entry.note) appendText(nameCell,'span',entry.note).className = 'expense-note';
       row.dataset.searchText = [entry.name,method,entry.note].join(' ').toLowerCase();
+      row.dataset.paymentMethod = method ? entry.method : '';
       for (const field of ['estimated','actual']) {
         const input = document.createElement('input');
         input.type = 'number';
@@ -1147,6 +1183,7 @@ billSchedule.hidden = false;
 billSchedule.addEventListener('toggle', () => {
   if (billSchedule.open) renderBillSchedule();
 });
+billStatusFilter.addEventListener('change', renderBillSchedule);
 byId('backup-tools').hidden = false;
 for (const [key,input] of Object.entries(cashInputs)) {
   input.addEventListener('input', () => {
@@ -1171,6 +1208,14 @@ overdueOnly.addEventListener('change', () => {
 });
 byId('payment-progress').hidden = false;
 expenseSearch.addEventListener('input', applyExpenseFilter);
+expenseMethodFilter.addEventListener('change', applyExpenseFilter);
+byId('clear-expense-filters').addEventListener('click', () => {
+  expenseSearch.value = '';
+  expenseMethodFilter.value = 'all';
+  for (const checkbox of [overBudgetOnly,unpaidOnly,overdueOnly]) checkbox.checked = false;
+  applyExpenseFilter();
+  expenseSearch.focus();
+});
 
 byId('add-row').addEventListener('submit', (event) => {
   event.preventDefault();
