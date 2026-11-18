@@ -40,6 +40,15 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .group-limit{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
 .group-limit label{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:650;flex-wrap:wrap}
 .group-limit input{width:120px}.group-limit progress{display:block;width:100%;height:9px;margin:8px 0 4px;accent-color:var(--green)}.group-limit progress[hidden]{display:none}.group-limit progress.over-limit{accent-color:#982d26}
+.bill-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;width:min(100%,460px);margin:8px 0;font-size:13px}
+.bill-calendar-grid>span,.bill-calendar-grid>button{display:flex;justify-content:center;align-items:center;gap:3px;min-width:0;min-height:34px;padding:2px}
+.bill-calendar-grid .calendar-weekday{min-height:22px;color:var(--muted);font-size:11px;font-weight:700}
+.bill-calendar-grid .calendar-day{background:#f1f3ec;border-radius:4px;color:var(--muted)}
+.bill-calendar-grid button{border-radius:4px;background:#fff;font-variant-numeric:tabular-nums}
+.bill-calendar-grid button.has-unpaid{background:#f6efdb;border-color:#ac8746}
+.bill-calendar-grid button[aria-pressed=true]{background:var(--green);border-color:var(--green);color:white}
+.bill-calendar-grid small{font-size:10px;font-weight:700}.bill-calendar-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.bill-calendar-actions button[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -133,6 +142,12 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </details>
 <details class="spending-insights bill-schedule" id="bill-schedule" hidden>
 <summary>Bill schedule</summary>
+<div id="bill-calendar" aria-labelledby="bill-calendar-month">
+<h3 id="bill-calendar-month"></h3>
+<p>Choose a date to show its bills. Shaded dates have unpaid bills.</p>
+<div class="bill-calendar-grid" id="bill-calendar-grid"></div>
+<div class="bill-calendar-actions"><button type="button" id="bill-calendar-clear" hidden>Clear date filter</button><p id="bill-calendar-selection" role="status"></p></div>
+</div>
 <label class="tracker-filter-select">Bill status<select id="bill-status-filter">
 <option value="all">All bills</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option>
 <option value="soon">Due within 7 days</option><option value="paid">Paid</option>
@@ -231,6 +246,8 @@ let renameTarget;
 const yearOverview = byId('year-overview');
 const billSchedule = byId('bill-schedule');
 const billStatusFilter = byId('bill-status-filter');
+const calendarClear = byId('bill-calendar-clear');
+let billDateFilter = '';
 const billDateFormat = new Intl.DateTimeFormat('en-IN', {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
 const historyLabel = new Intl.DateTimeFormat('en-IN', {month:'short',year:'numeric',timeZone:'UTC'});
 const shareFormat = new Intl.NumberFormat('en-IN', {style:'percent',maximumFractionDigits:1});
@@ -508,6 +525,57 @@ function billAmount(entry) {
   return amount === '' ? null : paise(amount);
 }
 
+function renderBillCalendar(bills) {
+  const first = new Date(selectedMonth + '-01T00:00:00Z');
+  const last = new Date(first);
+  last.setUTCMonth(last.getUTCMonth() + 1,0);
+  const byDate = new Map();
+  for (const {entry} of bills) {
+    if (!entry.dueDate.startsWith(selectedMonth + '-')) continue;
+    if (!byDate.has(entry.dueDate)) byDate.set(entry.dueDate,{count:0,unpaid:0});
+    const day = byDate.get(entry.dueDate);
+    day.count++;
+    if (entry.paid !== true) day.unpaid++;
+  }
+
+  if (billDateFilter && !byDate.has(billDateFilter)) billDateFilter = '';
+  byId('bill-calendar-month').textContent = monthLabel.format(first);
+  const grid = document.createDocumentFragment();
+  for (const day of ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']) {
+    appendText(grid,'span',day).className = 'calendar-weekday';
+  }
+  for (let empty = 0; empty < first.getUTCDay(); empty++) {
+    appendText(grid,'span','').setAttribute('aria-hidden','true');
+  }
+  for (let day = 1; day <= last.getUTCDate(); day++) {
+    const key = selectedMonth + '-' + String(day).padStart(2,'0');
+    const counts = byDate.get(key);
+    if (!counts) {
+      appendText(grid,'span',day).className = 'calendar-day';
+      continue;
+    }
+    const button = appendText(grid,'button',day);
+    button.type = 'button';
+    button.id = 'calendar-day-' + day;
+    button.classList.toggle('has-unpaid',counts.unpaid > 0);
+    button.setAttribute('aria-pressed',String(billDateFilter === key));
+    const date = billDateFormat.format(new Date(key + 'T00:00:00Z'));
+    button.setAttribute('aria-label',date + ', ' + counts.count +
+      (counts.count === 1 ? ' bill, ' : ' bills, ') + counts.unpaid + ' unpaid');
+    appendText(button,'small','· ' + counts.count).setAttribute('aria-hidden','true');
+    button.addEventListener('click',() => {
+      billDateFilter = billDateFilter === key ? '' : key;
+      renderBillSchedule();
+      byId('calendar-day-' + day).focus();
+    });
+  }
+  byId('bill-calendar-grid').replaceChildren(grid);
+  calendarClear.hidden = !billDateFilter;
+  byId('bill-calendar-selection').textContent = billDateFilter
+    ? 'Showing bills for ' + billDateFormat.format(new Date(billDateFilter + 'T00:00:00Z')) + '.'
+    : '';
+}
+
 function matchesBillStatus(filter, paid, dueStatus) {
   switch (filter) {
     case 'paid': return paid;
@@ -521,6 +589,7 @@ function matchesBillStatus(filter, paid, dueStatus) {
 function renderBillSchedule() {
   const bills = datedBills(entries);
   const filter = billStatusFilter.value;
+  renderBillCalendar(bills);
   let pending = 0;
   let shown = 0;
   let unknown = 0;
@@ -539,7 +608,7 @@ function renderBillSchedule() {
       else sum += amount;
     }
     const state = dueState(entry,todayKey,soon);
-    if (!matchesBillStatus(filter,paid,state)) continue;
+    if ((billDateFilter && entry.dueDate !== billDateFilter) || !matchesBillStatus(filter,paid,state)) continue;
     shown++;
     const row = document.createElement('tr');
     const name = appendText(row,'th',entry.name);
@@ -569,9 +638,9 @@ function renderBillSchedule() {
       (unknown ? ' · ' + unknown + ' without an amount' : '');
   }
   byId('bill-schedule-rows').replaceChildren(rows);
-  byId('bill-filter-result').textContent = !bills.length || filter === 'all' ? '' : shown
+  byId('bill-filter-result').textContent = !bills.length || (filter === 'all' && !billDateFilter) ? '' : shown
     ? 'Showing ' + shown + ' of ' + bills.length + ' dated bills.'
-    : 'No bills match this status.';
+    : 'No bills match the selected filters.';
   byId('bill-schedule-grid').hidden = shown === 0;
 }
 
@@ -816,6 +885,7 @@ function selectMonth() {
     return;
   }
   byId('month-action').textContent = '';
+  if (selectedMonth !== month.value) billDateFilter = '';
   selectedMonth = month.value;
   entries = readMonth(selectedMonth);
   loadCashPlan();
@@ -1239,6 +1309,12 @@ billSchedule.addEventListener('toggle', () => {
   if (billSchedule.open) renderBillSchedule();
 });
 billStatusFilter.addEventListener('change', renderBillSchedule);
+calendarClear.addEventListener('click', () => {
+  const day = Number(billDateFilter.slice(-2));
+  billDateFilter = '';
+  renderBillSchedule();
+  (byId('calendar-day-' + day) ?? billStatusFilter).focus();
+});
 byId('backup-tools').hidden = false;
 for (const [key,input] of Object.entries(cashInputs)) {
   input.addEventListener('input', () => {
