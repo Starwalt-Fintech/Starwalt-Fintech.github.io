@@ -50,6 +50,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .bill-calendar-grid small{font-size:10px;font-weight:700}.bill-calendar-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .bill-calendar-actions button[hidden]{display:none}
 .calendar-export{display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;margin:8px 0}.calendar-export label{font-size:13px}.calendar-export input{accent-color:var(--green)}.calendar-export button:disabled{opacity:.55;cursor:default}
+.clear-expense-filters:disabled{opacity:.55;cursor:default}.clear-expense-filters:disabled:hover{background:#fff}
 </style>
 </head>
 <body>
@@ -176,6 +177,10 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <label class="tracker-filter-select">Filter by payment method<select id="expense-method-filter">
 <option value="all">All methods</option><option value="">Unspecified</option>
 </select></label>
+<label class="tracker-filter-select">Filter by expense group<select id="expense-group-filter">
+<option value="all">All groups</option><option value="essentials">Household essentials</option><option value="other">Other expenses</option>
+</select></label>
+<button type="button" class="clear-expense-filters" id="export-filtered-expenses" disabled>Download filtered CSV</button>
 <button type="button" class="clear-expense-filters" id="clear-expense-filters">Clear expense filters</button>
 <p class="status" id="filter-status" role="status"></p>
 </div>
@@ -243,6 +248,8 @@ const paymentMethods = new Map([
   ['other','Other']
 ]);
 const expenseMethodFilter = byId('expense-method-filter');
+const expenseGroupFilter = byId('expense-group-filter');
+const exportFilteredExpenses = byId('export-filtered-expenses');
 for (const [value,label] of paymentMethods) {
   expenseMethod.add(new Option(label,value));
   expenseMethodFilter.add(new Option(label,value));
@@ -341,6 +348,9 @@ function describeComparison(current, previous, priorLabel) {
 function applyExpenseFilter() {
   const query = expenseSearch.value.trim().toLowerCase();
   const method = expenseMethodFilter.value;
+  const group = expenseGroupFilter.value;
+  const active = Boolean(query) || method !== 'all' || group !== 'all' ||
+    overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked;
   let count = 0;
   for (const row of document.querySelectorAll('.entry')) {
     const isOverBudget = row.querySelector('.difference').classList.contains('negative');
@@ -348,11 +358,13 @@ function applyExpenseFilter() {
     const matchesPayment = !unpaidOnly.checked || row.classList.contains('payment-pending');
     const matchesDue = !overdueOnly.checked || row.classList.contains('payment-overdue');
     const matchesMethod = method === 'all' || row.dataset.paymentMethod === method;
-    row.hidden = !matchesExpense || !matchesPayment || !matchesDue || !matchesMethod ||
+    const matchesGroup = group === 'all' || row.parentElement.id === group;
+    row.hidden = !matchesExpense || !matchesPayment || !matchesDue || !matchesMethod || !matchesGroup ||
       (overBudgetOnly.checked && !isOverBudget);
     if (!row.hidden) count++;
   }
-  byId('filter-status').textContent = query || method !== 'all' || overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked
+  exportFilteredExpenses.disabled = !active || count === 0;
+  byId('filter-status').textContent = active
     ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
 }
@@ -823,6 +835,7 @@ function render() {
     entries[key].forEach((entry,index) => {
       const row = body.insertRow();
       row.className = 'entry';
+      row.dataset.expenseIndex = index;
       const nameCell = appendText(row,'th',entry.name);
       nameCell.scope = 'row';
       const method = paymentMethods.get(entry.method);
@@ -1020,7 +1033,7 @@ function csvText(value) {
   return '"' + name.replaceAll('"','""') + '"';
 }
 
-function expenseCsv(key, data) {
+function expenseCsv(key, data, filtered = false) {
   const format = (amount) => (amount / 100).toFixed(2);
   const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR),Payment status,Due date,Recurring,Payment method,Notes'];
   let totalPlanned = 0;
@@ -1028,6 +1041,7 @@ function expenseCsv(key, data) {
   for (const [group, category] of Object.entries(groups)) {
     let planned = 0;
     let spent = 0;
+    if (filtered && !data[group].length) continue;
     for (const row of data[group]) {
       const estimate = paise(row.estimated);
       const actual = paise(row.actual);
@@ -1045,7 +1059,7 @@ function expenseCsv(key, data) {
     totalPlanned += planned;
     totalSpent += spent;
   }
-  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), '', '', '', '', ''].join(','));
+  rows.push([key, '', filtered ? 'Filtered total' : 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), '', '', '', '', ''].join(','));
   return rows.join('\r\n') + '\r\n';
 }
 
@@ -1200,6 +1214,17 @@ function downloadFile(content, filename, type) {
 
 byId('export-expenses').addEventListener('click', () => {
   downloadCsv(expenseCsv(selectedMonth, entries), 'starwalt-expenses-' + selectedMonth + '.csv');
+});
+exportFilteredExpenses.addEventListener('click', () => {
+  updateTotals();
+  applyExpenseFilter();
+  if (exportFilteredExpenses.disabled) return;
+  const visible = {};
+  for (const key of Object.keys(groups)) {
+    visible[key] = Array.from(byId(key).querySelectorAll('.entry:not([hidden])'),
+      row => entries[key][Number(row.dataset.expenseIndex)]);
+  }
+  downloadCsv(expenseCsv(selectedMonth,visible,true), 'starwalt-expenses-filtered-' + selectedMonth + '.csv');
 });
 byId('export-year').addEventListener('click', () => {
   const summary = yearSummary();
@@ -1411,9 +1436,11 @@ overdueOnly.addEventListener('change', () => {
 byId('payment-progress').hidden = false;
 expenseSearch.addEventListener('input', applyExpenseFilter);
 expenseMethodFilter.addEventListener('change', applyExpenseFilter);
+expenseGroupFilter.addEventListener('change', applyExpenseFilter);
 byId('clear-expense-filters').addEventListener('click', () => {
   expenseSearch.value = '';
   expenseMethodFilter.value = 'all';
+  expenseGroupFilter.value = 'all';
   for (const checkbox of [overBudgetOnly,unpaidOnly,overdueOnly]) checkbox.checked = false;
   applyExpenseFilter();
   expenseSearch.focus();
