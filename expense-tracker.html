@@ -30,6 +30,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .due-cell{text-align:left;min-width:145px}.due-cell input{width:100%;padding:5px;font-size:13px}.due-state{display:block;font-weight:700;font-size:12px;margin-top:2px}.due-state:empty{display:none}.entry.payment-overdue .due-state{color:#982d26}.entry.payment-upcoming .due-state{color:#77541a}
 .recurring-control{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--green);padding:2px 4px}.recurring-control input{accent-color:var(--green);margin:0}
 .undo-remove{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#f6efdb;border-radius:7px;padding:7px 10px;margin:0 0 9px;font-size:13px}.undo-remove[hidden]{display:none}.undo-remove button{border:1px solid #a9b7a8;border-radius:6px;padding:4px 8px;background:#fff;color:var(--green);font-weight:700}
+.bill-schedule[hidden],#bill-schedule-grid[hidden]{display:none}.bill-schedule .ledger{margin-top:8px}.bill-schedule table{min-width:430px;font-size:13px}.bill-schedule button{border:1px solid #a9b7a8;border-radius:6px;padding:4px 8px;background:#fff;color:var(--green);font-size:12px;font-weight:700}.bill-schedule td:last-child{white-space:nowrap}.bill-schedule .bill-status{display:block;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -102,6 +103,17 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </form>
 <p class="status" id="backup-status" role="status"></p>
 </details>
+<details class="spending-insights bill-schedule" id="bill-schedule" hidden>
+<summary>Bill schedule</summary>
+<p id="bill-schedule-total"></p>
+<p>Shows dated expenses in the selected tracker month. Totals use actual amounts when entered and estimates otherwise.</p>
+<div class="ledger" id="bill-schedule-grid" role="region" aria-label="Bill schedule" tabindex="0" hidden>
+<table aria-label="Bills ordered by due date">
+<thead><tr><th scope="col">Bill</th><th scope="col">Due date</th><th scope="col">Amount</th><th scope="col">Payment</th></tr></thead>
+<tbody id="bill-schedule-rows"></tbody>
+</table>
+</div>
+</details>
 <div class="expense-filter" id="expense-filter" hidden>
 <label class="expense-search">Find an expense <input type="search" id="expense-search" placeholder="e.g. groceries"></label>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
@@ -158,6 +170,8 @@ const editExpenseGroup = byId('edit-expense-group');
 const removedByMonth = new Map();
 let renameTarget;
 const yearOverview = byId('year-overview');
+const billSchedule = byId('bill-schedule');
+const billDateFormat = new Intl.DateTimeFormat('en-IN', {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
 const historyLabel = new Intl.DateTimeFormat('en-IN', {month:'short',year:'numeric',timeZone:'UTC'});
 const shareFormat = new Intl.NumberFormat('en-IN', {style:'percent',maximumFractionDigits:1});
 
@@ -378,6 +392,76 @@ function dueState(entry, today, soon) {
   return '';
 }
 
+function datedBills(data) {
+  return Object.entries(data).flatMap(([key,group]) => group
+    .map((entry,index) => ({key,index,entry}))
+    .filter(({entry}) => Boolean(entry.dueDate)))
+    .sort((left,right) => left.entry.dueDate.localeCompare(right.entry.dueDate));
+}
+
+function billAmount(entry) {
+  const amount = entry.actual || entry.estimated;
+  return amount === '' ? null : paise(amount);
+}
+
+function renderBillSchedule() {
+  const bills = datedBills(entries);
+  let pending = 0;
+  let unknown = 0;
+  let sum = 0;
+  const today = new Date();
+  const todayKey = dateKey(today);
+  today.setDate(today.getDate() + 7);
+  const soon = dateKey(today);
+  const rows = document.createDocumentFragment();
+  for (const {key,index,entry} of bills) {
+    const amount = billAmount(entry);
+    const paid = entry.paid === true;
+    if (!paid) {
+      pending++;
+      if (amount === null) unknown++;
+      else sum += amount;
+    }
+    const row = document.createElement('tr');
+    const name = appendText(row,'th',entry.name);
+    name.scope = 'row';
+    appendText(name,'small',groups[key].name).className = 'bill-status';
+    const dateCell = appendText(row,'td',billDateFormat.format(new Date(entry.dueDate + 'T00:00:00Z')));
+    const state = dueState(entry,todayKey,soon);
+    if (state) appendText(dateCell,'small',state).className = 'bill-status';
+    appendText(row,'td',amount === null ? '—' : money.format(amount / 100));
+    const cell = appendText(row,'td','');
+    const button = appendText(cell,'button',paid ? 'Mark unpaid' : 'Mark paid');
+    button.type = 'button';
+    const actionId = 'schedule-' + key + '-' + index;
+    button.id = actionId;
+    button.setAttribute('aria-label', (paid ? 'Mark unpaid: ' : 'Mark paid: ') + entry.name);
+    button.addEventListener('click', () => {
+      setBillPaid(entry,key,index,!paid);
+      byId(actionId).focus();
+    });
+    rows.append(row);
+  }
+
+  const summary = byId('bill-schedule-total');
+  if (!bills.length) summary.textContent = 'Add a due date to an expense to see it here.';
+  else {
+    summary.textContent = pending + (pending === 1 ? ' unpaid bill' : ' unpaid bills') +
+      ' · ' + money.format(sum / 100) + ' with amounts entered' +
+      (unknown ? ' · ' + unknown + ' without an amount' : '');
+  }
+  byId('bill-schedule-rows').replaceChildren(rows);
+  byId('bill-schedule-grid').hidden = bills.length === 0;
+}
+
+function setBillPaid(entry,key,index,paid) {
+  entry.paid = paid;
+  byId(key + '-paid-' + index).checked = paid;
+  saveMonth();
+  updateTotals();
+  applyExpenseFilter();
+}
+
 function updateTotals() {
   let estimated = 0;
   let actual = 0;
@@ -436,6 +520,7 @@ function updateTotals() {
     ' pending · ' + overdueCount + ' overdue · ' + upcomingCount + ' due within 7 days (including today).';
   updateCashFlow(estimated, actual);
   if (yearOverview.open) renderYear();
+  if (billSchedule.open) renderBillSchedule();
 }
 
 function renderUndo() {
@@ -529,13 +614,11 @@ function render() {
       dueLabel.id = key + '-due-state-' + index;
       const payment = document.createElement('input');
       payment.type = 'checkbox';
+      payment.id = key + '-paid-' + index;
       payment.checked = entry.paid === true;
       payment.setAttribute('aria-label', 'Mark ' + entry.name + ' as paid');
       payment.addEventListener('change', () => {
-        entry.paid = payment.checked;
-        saveMonth();
-        updateTotals();
-        applyExpenseFilter();
+        setBillPaid(entry,key,index,payment.checked);
         if (row.hidden) (overdueOnly.checked ? overdueOnly : unpaidOnly).focus();
       });
       const paymentCell = row.insertCell();
@@ -1005,6 +1088,10 @@ byId('expense-filter').hidden = false;
 byId('spending-insights').hidden = false;
 byId('cash-flow').hidden = false;
 yearOverview.hidden = false;
+billSchedule.hidden = false;
+billSchedule.addEventListener('toggle', () => {
+  if (billSchedule.open) renderBillSchedule();
+});
 byId('backup-tools').hidden = false;
 for (const [key,input] of Object.entries(cashInputs)) {
   input.addEventListener('input', () => {
