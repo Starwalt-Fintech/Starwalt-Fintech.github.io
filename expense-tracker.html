@@ -52,6 +52,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .calendar-export{display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;margin:8px 0}.calendar-export label{font-size:13px}.calendar-export input{accent-color:var(--green)}.calendar-export button:disabled{opacity:.55;cursor:default}
 .clear-expense-filters:disabled{opacity:.55;cursor:default}.clear-expense-filters:disabled:hover{background:#fff}
 .compare-months{margin-top:8px}.compare-months summary{cursor:pointer;font-weight:750;color:var(--green)}.compare-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0;font-size:13px}.compare-controls input,.compare-controls button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:4px 7px;font:inherit}.compare-months .ledger{margin:8px 0}.compare-months table{min-width:445px;font-size:13px}
+.expense-sort{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.filtered-subtotal{width:100%;margin:0;color:var(--green);font-size:13px;font-weight:700}
 </style>
 </head>
 <body>
@@ -197,7 +198,15 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </select></label>
 <button type="button" class="clear-expense-filters" id="export-filtered-expenses" disabled>Download filtered CSV</button>
 <button type="button" class="clear-expense-filters" id="clear-expense-filters">Clear expense filters</button>
+<div class="expense-sort">
+<label class="tracker-filter-select">Sort within groups<select id="expense-sort">
+<option value="original">Original order</option><option value="due">Earliest due date</option>
+<option value="actual">Highest actual amount</option><option value="overrun">Biggest budget overrun</option>
+</select></label>
+<button type="button" class="clear-expense-filters" id="apply-expense-sort">Sort rows</button>
+</div>
 <p class="status" id="filter-status" role="status"></p>
+<p class="filtered-subtotal" id="filtered-expense-subtotal" hidden></p>
 </div>
 <p class="payment-progress" id="payment-progress" hidden></p>
 <div class="undo-remove" id="undo-remove" hidden><span id="undo-message" role="status"></span><button type="button" id="undo-button">Undo removal</button></div>
@@ -265,6 +274,9 @@ const paymentMethods = new Map([
 const expenseMethodFilter = byId('expense-method-filter');
 const expenseGroupFilter = byId('expense-group-filter');
 const exportFilteredExpenses = byId('export-filtered-expenses');
+const filteredExpenseSubtotal = byId('filtered-expense-subtotal');
+const expenseSort = byId('expense-sort');
+let appliedExpenseSort = 'original';
 for (const [value,label] of paymentMethods) {
   expenseMethod.add(new Option(label,value));
   expenseMethodFilter.add(new Option(label,value));
@@ -363,6 +375,50 @@ function describeComparison(current, previous, priorLabel) {
     (change > 0 ? ' higher' : ' lower') + ' than ' + priorLabel + ' (' + previousTotal + ').';
 }
 
+function visibleExpenses() {
+  const visible = {};
+  for (const key of Object.keys(groups)) {
+    visible[key] = Array.from(byId(key).querySelectorAll('.entry:not([hidden])'),
+      row => entries[key][Number(row.dataset.expenseIndex)]);
+  }
+  return visible;
+}
+
+function updateFilteredSubtotal() {
+  if (filteredExpenseSubtotal.hidden) return;
+  const subtotal = monthlyAmounts(visibleExpenses());
+  const estimate = money.format((subtotal.estimated ?? 0) / 100);
+  const actual = money.format((subtotal.actual ?? 0) / 100);
+  filteredExpenseSubtotal.textContent = 'Matching rows · ' + estimate + ' estimated · ' + actual + ' actual';
+}
+
+function compareExpenseRows(left,right,mode) {
+  switch (mode) {
+    case 'due': return (left.dueDate || '9999-99-99').localeCompare(right.dueDate || '9999-99-99');
+    case 'actual': {
+      const actual = entry => entry.actual === '' ? -1 : paise(entry.actual);
+      return actual(right) - actual(left);
+    }
+    case 'overrun': return (paise(right.actual) - paise(right.estimated)) -
+      (paise(left.actual) - paise(left.estimated));
+    default: return 0;
+  }
+}
+
+function sortExpenseRows() {
+  for (const key of Object.keys(groups)) {
+    const body = byId(key);
+    const rows = [...body.querySelectorAll('.entry')];
+    rows.sort((left,right) => {
+      const a = Number(left.dataset.expenseIndex);
+      const b = Number(right.dataset.expenseIndex);
+      return compareExpenseRows(entries[key][a],entries[key][b],appliedExpenseSort) || a - b;
+    });
+    const subtotal = body.querySelector('.subtotal');
+    for (const row of rows) body.insertBefore(row,subtotal);
+  }
+}
+
 function applyExpenseFilter() {
   const query = expenseSearch.value.trim().toLowerCase();
   const method = expenseMethodFilter.value;
@@ -382,6 +438,8 @@ function applyExpenseFilter() {
     if (!row.hidden) count++;
   }
   exportFilteredExpenses.disabled = !active || count === 0;
+  filteredExpenseSubtotal.hidden = exportFilteredExpenses.disabled;
+  updateFilteredSubtotal();
   byId('filter-status').textContent = active
     ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
@@ -845,6 +903,7 @@ function updateTotals() {
   updateCashFlow(estimated, actual);
   if (yearOverview.open) renderYear();
   if (compareMonths.open) renderMonthComparison();
+  updateFilteredSubtotal();
   if (billSchedule.open) renderBillSchedule();
 }
 
@@ -1005,6 +1064,7 @@ function render() {
   }
   updateTotals();
   applyExpenseFilter();
+  if (appliedExpenseSort !== 'original') sortExpenseRows();
   renderUndo();
 }
 
@@ -1264,12 +1324,7 @@ exportFilteredExpenses.addEventListener('click', () => {
   updateTotals();
   applyExpenseFilter();
   if (exportFilteredExpenses.disabled) return;
-  const visible = {};
-  for (const key of Object.keys(groups)) {
-    visible[key] = Array.from(byId(key).querySelectorAll('.entry:not([hidden])'),
-      row => entries[key][Number(row.dataset.expenseIndex)]);
-  }
-  downloadCsv(expenseCsv(selectedMonth,visible,true), 'starwalt-expenses-filtered-' + selectedMonth + '.csv');
+  downloadCsv(expenseCsv(selectedMonth,visibleExpenses(),true), 'starwalt-expenses-filtered-' + selectedMonth + '.csv');
 });
 byId('export-year').addEventListener('click', () => {
   const summary = yearSummary();
@@ -1495,6 +1550,10 @@ byId('payment-progress').hidden = false;
 expenseSearch.addEventListener('input', applyExpenseFilter);
 expenseMethodFilter.addEventListener('change', applyExpenseFilter);
 expenseGroupFilter.addEventListener('change', applyExpenseFilter);
+byId('apply-expense-sort').addEventListener('click', () => {
+  appliedExpenseSort = expenseSort.value;
+  sortExpenseRows();
+});
 byId('clear-expense-filters').addEventListener('click', () => {
   expenseSearch.value = '';
   expenseMethodFilter.value = 'all';
