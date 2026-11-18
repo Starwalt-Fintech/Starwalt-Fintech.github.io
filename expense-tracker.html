@@ -216,7 +216,15 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <tbody id="essentials"></tbody><tbody id="other"></tbody>
 </table>
 </div>
-<form class="add-row" id="add-row"><label>Expense name<input name="name" maxlength="60" required placeholder="e.g. Pet care"></label><label>Group<select name="group"><option value="essentials">Household essentials</option><option value="other">Other expenses</option></select></label><button type="submit">Add expense</button></form>
+<form class="add-row" id="add-row">
+<label>Expense name<input name="name" maxlength="60" required placeholder="e.g. Pet care"></label>
+<label>Group<select name="group"><option value="essentials">Household essentials</option><option value="other">Other expenses</option></select></label>
+<label>Estimated amount (₹)<input type="number" inputmode="decimal" name="estimated" min="0" max="1000000000" step=".01"></label>
+<label>Actual amount (₹)<input type="number" inputmode="decimal" name="actual" min="0" max="1000000000" step=".01"></label>
+<label>Due date<input type="date" name="dueDate" max="9999-12-31"></label>
+<label>Payment method<select name="method" id="add-expense-method"><option value="">Unspecified</option></select></label>
+<button type="submit">Add expense</button>
+</form>
 <p class="note">Blank amounts count as zero once you enter an estimate or actual. Each month has its own entries.</p>
 <noscript><p>Enable JavaScript to enter and track expenses.</p></noscript>
 </main>
@@ -279,6 +287,7 @@ const expenseSort = byId('expense-sort');
 let appliedExpenseSort = 'original';
 for (const [value,label] of paymentMethods) {
   expenseMethod.add(new Option(label,value));
+  byId('add-expense-method').add(new Option(label,value));
   expenseMethodFilter.add(new Option(label,value));
 }
 const removedByMonth = new Map();
@@ -1563,17 +1572,39 @@ byId('clear-expense-filters').addEventListener('click', () => {
   expenseSearch.focus();
 });
 
-byId('add-row').addEventListener('submit', (event) => {
+const addExpense = byId('add-row');
+const addName = addExpense.elements.namedItem('name');
+const addDueDate = addExpense.elements.namedItem('dueDate');
+addName.addEventListener('input', () => addName.setCustomValidity(''));
+addDueDate.addEventListener('input', () => addDueDate.setCustomValidity(''));
+
+addExpense.addEventListener('submit', (event) => {
   event.preventDefault();
-  const fields = event.currentTarget.elements;
-  const name = fields.namedItem('name');
-  const label = name.value.trim();
-  if (!label) return;
-  entries[fields.namedItem('group').value].push({name:label, estimated:'', actual:''});
+  const name = addName.value.trim();
+  if (!name) {
+    addName.setCustomValidity('Enter an expense name.');
+    addName.reportValidity();
+    return;
+  }
+  const fields = addExpense.elements;
+  const group = fields.namedItem('group');
+  const selectedGroup = group.value;
+  const expense = {name, estimated:fields.namedItem('estimated').value, actual:fields.namedItem('actual').value};
+  const dueDate = addDueDate.value;
+  if (dueDate && !validDueDate(dueDate)) {
+    addDueDate.setCustomValidity('Enter a valid due date.');
+    addDueDate.reportValidity();
+    return;
+  }
+  if (dueDate) expense.dueDate = dueDate;
+  const method = fields.namedItem('method').value;
+  if (paymentMethods.has(method)) expense.method = method;
+  entries[selectedGroup].push(expense);
   saveMonth();
   render();
-  name.value = '';
-  name.focus();
+  addExpense.reset();
+  group.value = selectedGroup;
+  addName.focus();
 });
 </script>
 </body>
