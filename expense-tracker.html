@@ -51,6 +51,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .bill-calendar-actions button[hidden]{display:none}
 .calendar-export{display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;margin:8px 0}.calendar-export label{font-size:13px}.calendar-export input{accent-color:var(--green)}.calendar-export button:disabled{opacity:.55;cursor:default}
 .clear-expense-filters:disabled{opacity:.55;cursor:default}.clear-expense-filters:disabled:hover{background:#fff}
+.compare-months{margin-top:8px}.compare-months summary{cursor:pointer;font-weight:750;color:var(--green)}.compare-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0;font-size:13px}.compare-controls input,.compare-controls button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:4px 7px;font:inherit}.compare-months .ledger{margin:8px 0}.compare-months table{min-width:445px;font-size:13px}
 </style>
 </head>
 <body>
@@ -105,6 +106,20 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <section class="tracking-summary" id="month-comparison" aria-labelledby="comparison-heading" hidden>
 <h2 id="comparison-heading">Spending compared with last month</h2>
 <p id="comparison-text"></p>
+<details class="compare-months" id="compare-months">
+<summary>Compare two months by expense group</summary>
+<div class="compare-controls">
+<label>Compare with <input id="compare-month" type="month" required></label>
+<button type="button" id="compare-previous">Use previous month</button>
+</div>
+<div class="ledger" role="region" aria-label="Monthly spending comparison" tabindex="0">
+<table aria-label="Compare actual spending by expense group">
+<thead><tr><th scope="col">Expense group</th><th scope="col" id="compare-selected-heading"></th><th scope="col" id="compare-reference-heading"></th><th scope="col">Change</th></tr></thead>
+<tbody id="compare-month-rows"></tbody>
+</table>
+</div>
+<p>Uses recorded actual spending. A dash means there is no recorded amount for that group.</p>
+</details>
 </section>
 <details class="spending-insights" id="spending-insights" hidden>
 <summary>Spending history and breakdown</summary>
@@ -257,6 +272,9 @@ for (const [value,label] of paymentMethods) {
 const removedByMonth = new Map();
 let renameTarget;
 const yearOverview = byId('year-overview');
+const compareMonths = byId('compare-months');
+const compareMonth = byId('compare-month');
+let comparisonReference;
 const billSchedule = byId('bill-schedule');
 const billStatusFilter = byId('bill-status-filter');
 const calendarClear = byId('bill-calendar-clear');
@@ -735,6 +753,32 @@ function setBillPaid(entry,key,index,paid) {
   applyExpenseFilter();
 }
 
+function renderMonthComparison() {
+  const reference = comparisonReference ?? previousMonth(selectedMonth);
+  compareMonth.value = reference;
+  const earlier = reference === selectedMonth ? entries : readMonth(reference, () => null);
+  byId('compare-selected-heading').textContent = historyLabel.format(new Date(selectedMonth + '-01T00:00:00Z'));
+  byId('compare-reference-heading').textContent = historyLabel.format(new Date(reference + '-01T00:00:00Z'));
+  const rows = document.createDocumentFragment();
+  const format = amount => amount === null ? '—' : money.format(amount / 100);
+  for (const [name,current,baseline] of [
+    ...Object.entries(groups).map(([key,group]) => [group.name,
+      recordedActual({[key]:entries[key]}), recordedActual({[key]:earlier?.[key] ?? []})]),
+    ['Total recorded spend',recordedActual(entries),recordedActual(earlier)]
+  ]) {
+    const row = document.createElement('tr');
+    appendText(row,'th',name).scope = 'row';
+    appendText(row,'td',format(current));
+    appendText(row,'td',format(baseline));
+    const change = current === null || baseline === null ? null : current - baseline;
+    const cell = appendText(row,'td',change === null ? '—' : change === 0 ? 'No change' :
+      format(Math.abs(change)) + (change > 0 ? ' more' : ' less'));
+    if (change) cell.classList.add(change > 0 ? 'negative' : 'positive');
+    rows.append(row);
+  }
+  byId('compare-month-rows').replaceChildren(rows);
+}
+
 function updateTotals() {
   let estimated = 0;
   let actual = 0;
@@ -800,6 +844,7 @@ function updateTotals() {
     ' pending · ' + overdueCount + ' overdue · ' + upcomingCount + ' due within 7 days (including today).';
   updateCashFlow(estimated, actual);
   if (yearOverview.open) renderYear();
+  if (compareMonths.open) renderMonthComparison();
   if (billSchedule.open) renderBillSchedule();
 }
 
@@ -1395,6 +1440,19 @@ byId('go-next').addEventListener('click', () => goToMonth(shiftMonth(selectedMon
 byId('month-switcher').hidden = false;
 byId('month-tools').hidden = false;
 byId('month-comparison').hidden = false;
+compareMonths.addEventListener('toggle', () => {
+  if (compareMonths.open) renderMonthComparison();
+});
+compareMonth.addEventListener('change', () => {
+  if (compareMonth.validity.valid && isMonthKey(compareMonth.value)) {
+    comparisonReference = compareMonth.value;
+  }
+  renderMonthComparison();
+});
+byId('compare-previous').addEventListener('click', () => {
+  comparisonReference = undefined;
+  renderMonthComparison();
+});
 byId('expense-filter').hidden = false;
 byId('spending-insights').hidden = false;
 byId('cash-flow').hidden = false;
