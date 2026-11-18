@@ -31,6 +31,10 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .recurring-control{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--green);padding:2px 4px}.recurring-control input{accent-color:var(--green);margin:0}
 .undo-remove{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#f6efdb;border-radius:7px;padding:7px 10px;margin:0 0 9px;font-size:13px}.undo-remove[hidden]{display:none}.undo-remove button{border:1px solid #a9b7a8;border-radius:6px;padding:4px 8px;background:#fff;color:var(--green);font-weight:700}
 .bill-schedule[hidden],#bill-schedule-grid[hidden]{display:none}.bill-schedule .ledger{margin-top:8px}.bill-schedule table{min-width:430px;font-size:13px}.bill-schedule button{border:1px solid #a9b7a8;border-radius:6px;padding:4px 8px;background:#fff;color:var(--green);font-size:12px;font-weight:700}.bill-schedule td:last-child{white-space:nowrap}.bill-schedule .bill-status{display:block;color:var(--muted)}
+.expense-note{display:block;margin-top:2px;max-width:32ch;font-size:12px;font-weight:400;color:var(--muted);overflow-wrap:anywhere;white-space:pre-wrap}
+.expense-method{display:block;font-size:12px;font-weight:650;color:var(--green)}
+.rename-dialog textarea{box-sizing:border-box;width:100%;resize:vertical;padding:7px;border:1px solid #a9b7a8;border-radius:6px;font:inherit;color:var(--ink)}
+.method-breakdown{list-style:none;margin:4px 0;padding:0;font-size:13px}.method-breakdown li{display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -77,6 +81,9 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <ul class="history-chart" id="spending-history" aria-label="Actual spending by month"></ul>
 <h3>Where this month’s spending went</h3>
 <p id="group-breakdown"></p>
+<h3>Actual spending by payment method</h3>
+<p id="method-empty">Enter actual spending to see payment totals.</p>
+<ul class="method-breakdown" id="method-breakdown" aria-label="Actual spending by payment method"></ul>
 <h3>Biggest budget overruns</h3>
 <p id="overrun-empty">No over-budget expenses this month.</p>
 <ol class="overruns" id="overrun-list" aria-label="Top three over-budget expenses"></ol>
@@ -115,7 +122,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </div>
 </details>
 <div class="expense-filter" id="expense-filter" hidden>
-<label class="expense-search">Find an expense <input type="search" id="expense-search" placeholder="e.g. groceries"></label>
+<label class="expense-search">Find an expense <input type="search" id="expense-search" placeholder="Name, notes, or method"></label>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
 <label><input type="checkbox" id="unpaid-only">Show unpaid expenses only</label>
 <label><input type="checkbox" id="overdue-only">Show overdue expenses only</label>
@@ -138,6 +145,8 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <form class="add-row" id="rename-form">
 <label>Expense name<input id="rename-name" maxlength="60" required></label>
 <label>Expense group<select id="edit-expense-group"><option value="essentials">Household essentials</option><option value="other">Other expenses</option></select></label>
+<label>Payment method<select id="expense-method"><option value="">Unspecified</option></select></label>
+<label>Notes<textarea id="expense-note" rows="2" maxlength="200"></textarea></label>
 <button type="submit">Save changes</button><button type="button" id="rename-cancel">Cancel</button>
 </form>
 </dialog>
@@ -167,6 +176,17 @@ const expenseSearch = byId('expense-search');
 const renameDialog = byId('rename-dialog');
 const renameName = byId('rename-name');
 const editExpenseGroup = byId('edit-expense-group');
+const expenseMethod = byId('expense-method');
+const expenseNote = byId('expense-note');
+const paymentMethods = new Map([
+  ['upi','UPI'],
+  ['debit-card','Debit card'],
+  ['credit-card','Credit card'],
+  ['cash','Cash'],
+  ['bank-transfer','Bank transfer'],
+  ['other','Other']
+]);
+for (const [value,label] of paymentMethods) expenseMethod.add(new Option(label,value));
 const removedByMonth = new Map();
 let renameTarget;
 const yearOverview = byId('year-overview');
@@ -258,10 +278,10 @@ function applyExpenseFilter() {
   let count = 0;
   for (const row of document.querySelectorAll('.entry')) {
     const isOverBudget = row.querySelector('.difference').classList.contains('negative');
-    const matchesName = row.querySelector('th').textContent.toLowerCase().includes(query);
+    const matchesExpense = row.dataset.searchText.includes(query);
     const matchesPayment = !unpaidOnly.checked || row.classList.contains('payment-pending');
     const matchesDue = !overdueOnly.checked || row.classList.contains('payment-overdue');
-    row.hidden = !matchesName || !matchesPayment || !matchesDue || (overBudgetOnly.checked && !isOverBudget);
+    row.hidden = !matchesExpense || !matchesPayment || !matchesDue || (overBudgetOnly.checked && !isOverBudget);
     if (!row.hidden) count++;
   }
   byId('filter-status').textContent = query || overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked
@@ -273,6 +293,8 @@ function startRename(entry, key, index) {
   renameTarget = {entry,key,index,month:selectedMonth};
   renameName.value = entry.name;
   editExpenseGroup.value = key;
+  expenseMethod.value = paymentMethods.has(entry.method) ? entry.method : '';
+  expenseNote.value = entry.note ?? '';
   renameName.setCustomValidity('');
   renameDialog.showModal();
   renameDialog.scrollIntoView({block:"center"});
@@ -295,6 +317,11 @@ byId('rename-form').addEventListener('submit', (event) => {
   renameDialog.close();
   if (month !== selectedMonth || entries[key][index] !== entry) return;
   entry.name = name;
+  if (expenseMethod.value) entry.method = expenseMethod.value;
+  else delete entry.method;
+  const note = expenseNote.value.trim();
+  if (note) entry.note = note;
+  else delete entry.note;
   const destination = editExpenseGroup.value;
   let newIndex = index;
   if (destination !== key) {
@@ -337,6 +364,18 @@ function updateSpendingInsights(current, groupActuals) {
     group.name + ' ' + money.format(groupActuals[key] / 100) +
     ' (' + shareFormat.format(groupActuals[key] / current) + ')'
   ).join(' · ');
+}
+
+function renderPaymentMethods(methodTotals) {
+  const list = document.createDocumentFragment();
+  for (const [method,amount] of [...methodTotals].sort((left,right) => right[1] - left[1])) {
+    const item = document.createElement('li');
+    appendText(item,'span',paymentMethods.get(method) ?? 'Unspecified');
+    appendText(item,'strong',money.format(amount / 100));
+    list.append(item);
+  }
+  byId('method-breakdown').replaceChildren(list);
+  byId('method-empty').hidden = methodTotals.size > 0;
 }
 
 function updateCashFlow(estimated, actual) {
@@ -466,6 +505,7 @@ function updateTotals() {
   let estimated = 0;
   let actual = 0;
   const groupActuals = {};
+  const methodTotals = new Map();
   const overruns = [];
   let paidCount = 0;
   let pendingCount = 0;
@@ -483,6 +523,10 @@ function updateTotals() {
       const spent = paise(entry.actual);
       groupEstimated += planned;
       groupActual += spent;
+      if (entry.actual !== '') {
+        const method = paymentMethods.has(entry.method) ? entry.method : '';
+        methodTotals.set(method,(methodTotals.get(method) ?? 0) + spent);
+      }
       if (spent > planned) overruns.push({name:entry.name, group:groups[key].name, amount:spent - planned});
       const delta = byId(key + '-difference-' + index);
       difference(delta, entry.estimated || entry.actual ? planned - spent : null);
@@ -515,6 +559,7 @@ function updateTotals() {
   byId('comparison-text').textContent = describeComparison(currentActual, prior.actual,
     monthLabel.format(new Date(prior.key + '-01T00:00:00Z')));
   updateSpendingInsights(currentActual, groupActuals);
+  renderPaymentMethods(methodTotals);
   renderOverruns(overruns);
   byId('payment-progress').textContent = paidCount + ' paid · ' + pendingCount +
     ' pending · ' + overdueCount + ' overdue · ' + upcomingCount + ' due within 7 days (including today).';
@@ -555,7 +600,12 @@ function render() {
     entries[key].forEach((entry,index) => {
       const row = body.insertRow();
       row.className = 'entry';
-      appendText(row, 'th', entry.name).scope = 'row';
+      const nameCell = appendText(row,'th',entry.name);
+      nameCell.scope = 'row';
+      const method = paymentMethods.get(entry.method);
+      if (method) appendText(nameCell,'span',method).className = 'expense-method';
+      if (entry.note) appendText(nameCell,'span',entry.note).className = 'expense-note';
+      row.dataset.searchText = [entry.name,method,entry.note].join(' ').toLowerCase();
       for (const field of ['estimated','actual']) {
         const input = document.createElement('input');
         input.type = 'number';
@@ -747,7 +797,7 @@ function csvText(value) {
 
 function expenseCsv(key, data) {
   const format = (amount) => (amount / 100).toFixed(2);
-  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR),Payment status,Due date,Recurring'];
+  const rows = ['Month,Group,Expense,Estimated (INR),Actual (INR),Difference (INR),Payment status,Due date,Recurring,Payment method,Notes'];
   let totalPlanned = 0;
   let totalSpent = 0;
   for (const [group, category] of Object.entries(groups)) {
@@ -762,14 +812,15 @@ function expenseCsv(key, data) {
         row.estimated === '' ? '' : format(estimate),
         row.actual === '' ? '' : format(actual),
         row.estimated === '' && row.actual === '' ? '' : format(estimate - actual),
-        row.paid === true ? 'Paid' : isTrackedExpense(row) ? 'Unpaid' : '', row.dueDate ?? '', row.recurring === true ? 'Yes' : ''
+        row.paid === true ? 'Paid' : isTrackedExpense(row) ? 'Unpaid' : '', row.dueDate ?? '', row.recurring === true ? 'Yes' : '', paymentMethods.get(row.method) ?? '',
+        row.note ? csvText(row.note) : ''
       ].join(','));
     }
-    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent), '', '', ''].join(','));
+    rows.push([key, csvText(category.name), 'Subtotal', format(planned), format(spent), format(planned - spent), '', '', '', '', ''].join(','));
     totalPlanned += planned;
     totalSpent += spent;
   }
-  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), '', '', ''].join(','));
+  rows.push([key, '', 'Monthly total', format(totalPlanned), format(totalSpent), format(totalPlanned - totalSpent), '', '', '', '', ''].join(','));
   return rows.join('\r\n') + '\r\n';
 }
 
@@ -990,12 +1041,16 @@ function validateBackup(data) {
               (row.paid !== undefined && typeof row.paid !== 'boolean') ||
               (row.dueDate !== undefined && !validDueDate(row.dueDate)) ||
               (row.recurring !== undefined && typeof row.recurring !== 'boolean') ||
+              (row.method !== undefined && !paymentMethods.has(row.method)) ||
+              (row.note !== undefined && (typeof row.note !== 'string' || row.note.length > 200)) ||
               (row.billingDay !== undefined && (!Number.isInteger(row.billingDay) || row.billingDay < 1 || row.billingDay > 31))) {
             throw new Error('Invalid expense entry in backup.');
           }
           const expense = {name:row.name, estimated:row.estimated, actual:row.actual};
           if (row.paid === true) expense.paid = true;
           if (row.dueDate) expense.dueDate = row.dueDate;
+          if (row.method) expense.method = row.method;
+          if (row.note) expense.note = row.note;
           if (row.recurring === true) {
             expense.recurring = true;
             if (row.billingDay) expense.billingDay = row.billingDay;
