@@ -21,6 +21,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .spending-insights{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 15px}.spending-insights[hidden]{display:none}.spending-insights summary{font-weight:750;color:var(--green);cursor:pointer}.spending-insights h3{font-size:14px;margin:12px 0 5px}.spending-insights p{margin:4px 0;color:var(--muted);font-size:13px}
 .history-chart{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px}.history-chart li{display:grid;grid-template-columns:70px minmax(0,1fr) minmax(80px,auto);align-items:center;gap:8px}.history-chart strong{text-align:right;overflow-wrap:anywhere}.history-chart .selected-month{font-weight:750}.history-track{height:8px;border-radius:8px;background:#edf1e8}.history-bar{display:block;height:100%;border-radius:8px;background:#598568}.selected-month .history-bar{background:var(--green)}
 .cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
+.cash-forecast{margin:12px 0 0}.cash-forecast summary{cursor:pointer;color:var(--green);font-size:14px;font-weight:750}.cash-forecast .note{margin:6px 0}.cash-forecast .totals dd{overflow-wrap:anywhere}
 .year-overview .ledger{margin:8px 0}.year-overview table{min-width:660px;font-size:13px}.year-overview td{white-space:nowrap}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
 .backup-tools .month-tools{margin:9px 0 0}.backup-tools .status:empty{display:none}.backup-tools input{max-width:100%;font-size:13px}
 .expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
@@ -87,6 +88,16 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <div id="cash-actual-card"><dt>Left after actuals</dt><dd id="cash-actual">—</dd></div>
 <div id="cash-goal-card"><dt id="cash-goal-label">Savings target</dt><dd id="cash-goal">—</dd></div>
 </dl>
+<details class="cash-forecast">
+<summary>Forecast after unpaid bills</summary>
+<p class="note">Uses recorded actuals plus estimates for unpaid bills with a due date and no actual amount. Each expense is counted once.</p>
+<dl class="totals" aria-label="Bill forecast">
+<div><dt>Set aside for bills</dt><dd id="forecast-set-aside">—</dd></div>
+<div id="forecast-cash-card"><dt>Projected cash left</dt><dd id="forecast-cash">—</dd></div>
+<div id="forecast-target-card"><dt>Projected vs. savings target</dt><dd id="forecast-target">—</dd></div>
+</dl>
+<p class="note" id="forecast-note"></p>
+</details>
 </section>
 <details class="spending-insights" id="group-limits" hidden>
 <summary>Monthly spending limits</summary>
@@ -582,6 +593,42 @@ function updateCashFlow(estimated, actual) {
   if (goal !== null && goal < 0) byId('cash-goal').textContent = money.format(-goal / 100);
 }
 
+function unpaidBillReserve(data) {
+  let reserve = null;
+  let estimatedBills = 0;
+  let missingBills = 0;
+  for (const entry of Object.values(data).flat()) {
+    if (!entry.dueDate || entry.actual !== '') continue;
+    if (entry.paid === true || entry.estimated === '') {
+      missingBills++;
+      continue;
+    }
+    reserve = (reserve ?? 0) + paise(entry.estimated);
+    estimatedBills++;
+  }
+  return {reserve, estimatedBills, missingBills};
+}
+
+function renderBillForecast(data, actual, cash) {
+  const {reserve, estimatedBills, missingBills} = unpaidBillReserve(data);
+  const projected = cash.income === '' || (actual === null && reserve === null)
+    ? null
+    : paise(cash.income) - (actual ?? 0) - (reserve ?? 0);
+  const gap = projected === null || cash.target === '' ? null : projected - paise(cash.target);
+  byId('forecast-set-aside').textContent = money.format((reserve ?? 0) / 100);
+  difference(byId('forecast-cash-card'), projected, byId('forecast-cash'));
+  difference(byId('forecast-target-card'), gap, byId('forecast-target'));
+  const notes = [estimatedBills === 1 ? 'Includes 1 bill estimate.' : 'Includes ' + estimatedBills + ' bill estimates.'];
+  if (missingBills > 0) {
+    notes.push(missingBills === 1 ? '1 dated bill needs an amount.' : missingBills + ' dated bills need amounts.');
+    notes.push('Enter an actual amount for paid bills or an estimate for unpaid bills.');
+  }
+  if (projected === null) {
+    notes.push('Enter income and at least one actual expense or bill estimate to see projected cash left.');
+  }
+  byId('forecast-note').textContent = notes.join(' ');
+}
+
 function renderOverruns(overruns) {
   const top = overruns.sort((left,right) => right.amount - left.amount).slice(0,3);
   const items = document.createDocumentFragment();
@@ -910,6 +957,7 @@ function updateTotals() {
   byId('payment-progress').textContent = paidCount + ' paid · ' + pendingCount +
     ' pending · ' + overdueCount + ' overdue · ' + upcomingCount + ' due within 7 days (including today).';
   updateCashFlow(estimated, actual);
+  renderBillForecast(entries, currentActual, cashPlan);
   if (yearOverview.open) renderYear();
   if (compareMonths.open) renderMonthComparison();
   updateFilteredSubtotal();
