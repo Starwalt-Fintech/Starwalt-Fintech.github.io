@@ -21,7 +21,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .spending-insights{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 15px}.spending-insights[hidden]{display:none}.spending-insights summary{font-weight:750;color:var(--green);cursor:pointer}.spending-insights h3{font-size:14px;margin:12px 0 5px}.spending-insights p{margin:4px 0;color:var(--muted);font-size:13px}
 .history-chart{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px}.history-chart li{display:grid;grid-template-columns:70px minmax(0,1fr) minmax(80px,auto);align-items:center;gap:8px}.history-chart strong{text-align:right;overflow-wrap:anywhere}.history-chart .selected-month{font-weight:750}.history-track{height:8px;border-radius:8px;background:#edf1e8}.history-bar{display:block;height:100%;border-radius:8px;background:#598568}.selected-month .history-bar{background:var(--green)}
 .cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
-.year-overview .ledger{margin:8px 0}.year-overview table{min-width:390px;font-size:13px}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
+.year-overview .ledger{margin:8px 0}.year-overview table{min-width:660px;font-size:13px}.year-overview td{white-space:nowrap}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
 .backup-tools .month-tools{margin:9px 0 0}.backup-tools .status:empty{display:none}.backup-tools input{max-width:100%;font-size:13px}
 .expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
 .rename-dialog{border:1px solid var(--line);border-radius:12px;padding:18px;width:min(390px,calc(100% - 28px));color:var(--ink)}.rename-dialog::backdrop{background:#10252288}.rename-dialog h2{font-size:19px;margin:0 0 8px}.rename-dialog .add-row{margin:0}.rename-dialog .add-row label{width:100%}.rename-dialog .add-row button[type=button]{background:#edf1e8;color:var(--ink)}
@@ -139,11 +139,11 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <details class="spending-insights year-overview" id="year-overview" hidden>
 <summary>Yearly expense summary</summary>
 <p id="year-note"></p>
-<div class="ledger" role="region" aria-label="Yearly expense totals by month" tabindex="0">
+<div class="ledger" role="region" aria-label="Yearly expenses and cash flow by month" tabindex="0">
 <table aria-label="Yearly expense summary">
-<thead><tr><th scope="col">Month</th><th scope="col">Estimated</th><th scope="col">Actual</th><th scope="col">Difference</th></tr></thead>
+<thead><tr><th scope="col">Month</th><th scope="col">Estimated</th><th scope="col">Actual</th><th scope="col">Difference</th><th scope="col">Income</th><th scope="col">Savings target</th><th scope="col">Cash left</th></tr></thead>
 <tbody id="year-months"></tbody>
-<tfoot><tr class="subtotal"><th scope="row">Year total</th><td id="year-estimated"></td><td id="year-actual"></td><td id="year-difference"></td></tr></tfoot>
+<tfoot><tr class="subtotal"><th scope="row">Year total</th><td id="year-estimated"></td><td id="year-actual"></td><td id="year-difference"></td><td id="year-income"></td><td id="year-target"></td><td id="year-cash-left"></td></tr></tfoot>
 </table>
 </div>
 <div class="month-tools"><button type="button" id="export-year">Download yearly summary (CSV)</button></div>
@@ -1262,12 +1262,19 @@ function monthlyAmounts(data) {
 
 function yearSummary() {
   const year = selectedMonth.slice(0,4);
-  const totals = {estimated:null, actual:null};
+  const totals = {estimated:null, actual:null, income:null, target:null, cashLeft:null};
   const months = [];
   for (let number = 1; number <= 12; number++) {
     const key = year + '-' + String(number).padStart(2,'0');
-    const amounts = monthlyAmounts(key === selectedMonth ? entries : readMonth(key, () => null));
-    for (const field of ['estimated','actual']) {
+    const current = key === selectedMonth;
+    const amounts = monthlyAmounts(current ? entries : readMonth(key, () => null));
+    const cash = current ? cashPlan : cashMemory.get(key) ?? readSaved(cashPrefix + key);
+    for (const field of ['income','target']) {
+      const value = cash?.[field];
+      amounts[field] = value !== '' && validBackupAmount(value) ? paise(value) : null;
+    }
+    amounts.cashLeft = amounts.income === null || amounts.actual === null ? null : amounts.income - amounts.actual;
+    for (const field of Object.keys(totals)) {
       if (amounts[field] !== null) totals[field] = (totals[field] ?? 0) + amounts[field];
     }
     months.push({key, ...amounts});
@@ -1281,31 +1288,39 @@ function budgetDifference(estimated, actual) {
 
 function renderYear() {
   const {year, months, totals} = yearSummary();
-  byId('year-note').textContent = 'Calendar year ' + year + '. A dash means no amount was entered.';
+  const cashMonths = months.filter(month => month.cashLeft !== null).length;
+  byId('year-note').textContent = 'Calendar year ' + year +
+    '. A dash marks missing data. Cash left is income minus actual spending. ' +
+    'The cash-left total includes ' + cashMonths + ' of 12 months with both amounts recorded.';
+  const format = amount => amount === null ? '—' : money.format(amount / 100);
   const rows = document.createDocumentFragment();
-  for (const {key, estimated, actual} of months) {
+  for (const {key, estimated, actual, income, target, cashLeft} of months) {
     const row = document.createElement('tr');
     if (key === selectedMonth) row.setAttribute('aria-current','true');
     appendText(row,'th',historyLabel.format(new Date(key + '-01T00:00:00Z'))).scope = 'row';
-    for (const amount of [estimated,actual]) {
-      appendText(row,'td',amount === null ? '—' : money.format(amount / 100));
-    }
+    appendText(row,'td',format(estimated));
+    appendText(row,'td',format(actual));
     difference(appendText(row,'td',''), budgetDifference(estimated,actual));
+    appendText(row,'td',format(income));
+    appendText(row,'td',format(target));
+    difference(appendText(row,'td',''), cashLeft);
     rows.append(row);
   }
   byId('year-months').replaceChildren(rows);
-  byId('year-estimated').textContent = totals.estimated === null ? '—' : money.format(totals.estimated / 100);
-  byId('year-actual').textContent = totals.actual === null ? '—' : money.format(totals.actual / 100);
+  for (const field of ['estimated','actual','income','target']) {
+    byId('year-' + field).textContent = format(totals[field]);
+  }
   difference(byId('year-difference'), budgetDifference(totals.estimated,totals.actual));
+  difference(byId('year-cash-left'), totals.cashLeft);
 }
 
 function yearlyCsv(summary) {
   const format = (value) => value === null ? '' : (value / 100).toFixed(2);
-  const row = (label, {estimated, actual}) => [
-    label, format(estimated), format(actual), format(budgetDifference(estimated,actual))
+  const row = (label, {estimated, actual, income, target, cashLeft}) => [
+    label, ...[estimated,actual,budgetDifference(estimated,actual),income,target,cashLeft].map(format)
   ].join(',');
   return [
-    'Month,Estimated (INR),Actual (INR),Difference (INR)',
+    'Month,Estimated (INR),Actual (INR),Difference (INR),Income (INR),Savings target (INR),Cash left (INR)',
     ...summary.months.map(amounts => row(amounts.key, amounts)),
     row('Year total', summary.totals)
   ].join('\r\n') + '\r\n';
