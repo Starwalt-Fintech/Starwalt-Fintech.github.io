@@ -54,6 +54,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .clear-expense-filters:disabled{opacity:.55;cursor:default}.clear-expense-filters:disabled:hover{background:#fff}
 .compare-months{margin-top:8px}.compare-months summary{cursor:pointer;font-weight:750;color:var(--green)}.compare-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0;font-size:13px}.compare-controls input,.compare-controls button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:4px 7px;font:inherit}.compare-months .ledger{margin:8px 0}.compare-months table{min-width:445px;font-size:13px}
 .expense-sort{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.filtered-subtotal{width:100%;margin:0;color:var(--green);font-size:13px;font-weight:700}
+.expense-history .add-row{margin:8px 0}.expense-history .ledger{margin-top:8px}.expense-history table{min-width:470px;font-size:13px}.expense-history td{white-space:nowrap}.expense-history .history-month-button{border:0;background:transparent;color:var(--green);font:inherit;text-decoration:underline;padding:4px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -158,6 +159,20 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </table>
 </div>
 <div class="month-tools"><button type="button" id="export-year">Download yearly summary (CSV)</button></div>
+</details>
+<details class="spending-insights expense-history" id="expense-history" hidden>
+<summary>Search expenses across months</summary>
+<form class="add-row" id="expense-history-form">
+<label class="expense-search">Name, note, or payment method <input type="search" id="expense-history-query" required></label>
+<button type="submit">Search</button>
+</form>
+<p id="expense-history-status" role="status">Search recorded expenses saved in this browser.</p>
+<div class="ledger" id="expense-history-results" role="region" aria-label="Matching expenses across months" tabindex="0" hidden>
+<table>
+<thead><tr><th scope="col">Expense</th><th scope="col">Month</th><th scope="col">Estimated</th><th scope="col">Actual</th></tr></thead>
+<tbody id="expense-history-rows"></tbody>
+</table>
+</div>
 </details>
 <details class="spending-insights backup-tools" id="backup-tools" hidden>
 <summary>Back up or restore tracker data</summary>
@@ -463,6 +478,10 @@ function applyExpenseFilter() {
   byId('filter-status').textContent = active
     ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
+}
+
+function expenseSearchText(entry) {
+  return [entry.name,paymentMethods.get(entry.method),entry.note].join(' ').toLowerCase();
 }
 
 function startRename(entry, key, index) {
@@ -1002,7 +1021,7 @@ function render() {
       const method = paymentMethods.get(entry.method);
       if (method) appendText(nameCell,'span',method).className = 'expense-method';
       if (entry.note) appendText(nameCell,'span',entry.note).className = 'expense-note';
-      row.dataset.searchText = [entry.name,method,entry.note].join(' ').toLowerCase();
+      row.dataset.searchText = expenseSearchText(entry);
       row.dataset.paymentMethod = method ? entry.method : '';
       for (const field of ['estimated','actual']) {
         const input = document.createElement('input');
@@ -1412,20 +1431,72 @@ function isMonthKey(key) {
   return typeof key === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(key);
 }
 
-function makeBackup() {
-  const keys = new Set([...memory.keys(), ...cashMemory.keys()]);
+function savedMonthKeys(prefixes, inMemoryKeys) {
+  const keys = new Set(inMemoryKeys);
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      for (const prefix of [expensePrefix,cashPrefix]) {
+      for (const prefix of prefixes) {
         if (key?.startsWith(prefix)) keys.add(key.slice(prefix.length));
       }
     }
   } catch {
     // Current-session entries can still be exported without browser storage.
   }
+  return [...keys].filter(isMonthKey).sort();
+}
+
+function findHistoricalExpenses(query) {
+  const matches = [];
+  for (const key of savedMonthKeys([expensePrefix], [...memory.keys(), selectedMonth]).reverse()) {
+    const expenses = key === selectedMonth ? entries : readMonth(key, () => null);
+    if (!expenses) continue;
+    for (const group of Object.keys(groups)) {
+      for (const entry of expenses[group]) {
+        const recorded = isTrackedExpense(entry) || entry.note || entry.method || entry.recurring;
+        if (recorded && expenseSearchText(entry).includes(query)) matches.push({key,group,entry});
+      }
+    }
+  }
+  return matches;
+}
+
+function renderExpenseHistory(query) {
+  const results = query ? findHistoricalExpenses(query) : [];
+  const rows = document.createDocumentFragment();
+  let actual = null;
+  for (const {key, group, entry} of results) {
+    const row = document.createElement('tr');
+    const name = appendText(row,'th',entry.name);
+    name.scope = 'row';
+    appendText(name,'small',groups[group].name).className = 'expense-method';
+    const method = paymentMethods.get(entry.method);
+    if (method) appendText(name,'small',method).className = 'expense-method';
+    if (entry.note) appendText(name,'small',entry.note).className = 'expense-note';
+    const label = historyLabel.format(new Date(key + '-01T00:00:00Z'));
+    const button = appendText(appendText(row,'td',''),'button',label);
+    button.type = 'button';
+    button.className = 'history-month-button';
+    button.setAttribute('aria-label','Open ' + label + ' expenses');
+    button.addEventListener('click', () => {
+      goToMonth(key);
+      month.focus();
+    });
+    appendText(row,'td',entry.estimated === '' ? '—' : money.format(paise(entry.estimated) / 100));
+    appendText(row,'td',entry.actual === '' ? '—' : money.format(paise(entry.actual) / 100));
+    if (entry.actual !== '') actual = (actual ?? 0) + paise(entry.actual);
+    rows.append(row);
+  }
+  byId('expense-history-rows').replaceChildren(rows);
+  byId('expense-history-results').hidden = results.length === 0;
+  const count = results.length + (results.length === 1 ? ' matching expense' : ' matching expenses');
+  const subtotal = actual === null ? 'No actual amounts recorded' : money.format(actual / 100) + ' total actual spending';
+  byId('expense-history-status').textContent = query ? count + '. ' + subtotal + '.' : 'Enter a name, note, or payment method.';
+}
+
+function makeBackup() {
   const months = [];
-  for (const month of [...keys].filter(isMonthKey).sort()) {
+  for (const month of savedMonthKeys([expensePrefix,cashPrefix], [...memory.keys(), ...cashMemory.keys()])) {
     const expenses = readMonth(month, () => null);
     const cash = cashMemory.get(month) ?? readSaved(cashPrefix + month);
     if (expenses || cash) months.push({month, expenses, cash});
@@ -1582,6 +1653,11 @@ byId('compare-previous').addEventListener('click', () => {
 });
 byId('expense-filter').hidden = false;
 byId('spending-insights').hidden = false;
+byId('expense-history').hidden = false;
+byId('expense-history-form').addEventListener('submit', event => {
+  event.preventDefault();
+  renderExpenseHistory(byId('expense-history-query').value.trim().toLowerCase());
+});
 byId('cash-flow').hidden = false;
 byId('group-limits').hidden = false;
 yearOverview.hidden = false;
