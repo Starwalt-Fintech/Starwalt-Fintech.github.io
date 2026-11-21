@@ -32,6 +32,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
 .rename-dialog{border:1px solid var(--line);border-radius:12px;padding:18px;width:min(390px,calc(100% - 28px));color:var(--ink)}.rename-dialog::backdrop{background:#10252288}.rename-dialog h2{font-size:19px;margin:0 0 8px}.rename-dialog .add-row{margin:0}.rename-dialog .add-row label{width:100%}.rename-dialog .add-row button[type=button]{background:#edf1e8;color:var(--ink)}
 .month-switcher{display:flex;flex-wrap:wrap;gap:6px}.month-switcher[hidden]{display:none}.month-switcher button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:5px 9px;font-size:13px;font-weight:700}.month-switcher button:hover{background:#e8efdd}.overruns{font-size:13px;margin:4px 0 0;padding-left:22px}.overruns li{padding:2px 0}.overruns strong{color:#982d26}.overruns span{color:var(--muted)}
+.saved-months .ledger{margin-top:8px;max-height:300px}.saved-months table{min-width:360px;font-size:13px}.saved-months thead{position:sticky;top:0}.saved-months [aria-current]{background:#e8efdd}.saved-months td{white-space:nowrap}
 .payment-progress{margin:0 0 10px;color:var(--muted);font-size:13px}.payment-progress[hidden]{display:none}.payment-cell{text-align:center}.payment-cell input{width:18px;height:18px;accent-color:var(--green);vertical-align:middle;cursor:pointer}
 .due-cell{text-align:left;min-width:145px}.due-cell input{width:100%;padding:5px;font-size:13px}.due-state{display:block;font-weight:700;font-size:12px;margin-top:2px}.due-state:empty{display:none}.entry.payment-overdue .due-state{color:#982d26}.entry.payment-upcoming .due-state{color:#77541a}
 .recurring-control{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--green);padding:2px 4px}.recurring-control input{accent-color:var(--green);margin:0}
@@ -91,6 +92,19 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <div class="month-switcher" id="month-switcher" role="group" aria-label="Month shortcuts" hidden>
 <button type="button" id="go-previous">Previous month</button><button type="button" id="go-current">Current month</button><button type="button" id="go-next">Next month</button>
 </div><p id="storage-status" class="status" role="status">Saved in this browser.</p></div>
+<details class="spending-insights saved-months" id="saved-months" hidden>
+<summary>Browse saved months</summary>
+<label class="tracker-filter-select">Show <select id="saved-month-filter">
+<option value="all">All saved months</option><option value="actual">Months with actuals</option><option value="no-actual">Months without actuals</option>
+</select></label>
+<p id="saved-month-status" role="status"></p>
+<div class="ledger" id="saved-month-table" role="region" aria-label="Saved tracker months" tabindex="0" hidden>
+<table>
+<thead><tr><th scope="col">Month</th><th scope="col">Estimated</th><th scope="col">Actual</th></tr></thead>
+<tbody id="saved-month-rows"></tbody>
+</table>
+</div>
+</details>
 <div class="month-tools" id="month-tools" hidden>
 <button type="button" id="copy-estimates">Reuse last month’s estimates</button>
 <button type="button" id="copy-recurring">Bring in recurring bills</button>
@@ -399,6 +413,8 @@ const groups = {
 };
 const money = new Intl.NumberFormat('en-IN', {style:'currency',currency:'INR',minimumFractionDigits:0,maximumFractionDigits:2});
 const month = byId('month');
+const savedMonths = byId('saved-months');
+const savedMonthFilter = byId('saved-month-filter');
 const scenarioAmount = byId('scenario-amount');
 const status = byId('storage-status');
 const memory = new Map();
@@ -1344,6 +1360,7 @@ function updateTotals() {
   if (billSchedule.open) renderBillSchedule();
   if (recurringReview.open) renderRecurringReview();
   if (unpaidHistory.open) renderUnpaidHistory();
+  if (savedMonths.open) renderSavedMonths();
 }
 
 function renderUndo() {
@@ -1399,8 +1416,8 @@ function render() {
         input.addEventListener('input', () => {
           if (!input.validity.valid) return;
           entry[field] = input.value;
-          updateTotals();
           saveMonth();
+          updateTotals();
         });
         input.addEventListener('blur', () => {
           if (!input.validity.valid) {
@@ -1495,6 +1512,7 @@ function render() {
         else delete entry.billingDay;
         saveMonth();
         if (recurringReview.open) renderRecurringReview();
+        if (savedMonths.open) renderSavedMonths();
       });
       recurringLabel.append(recurring, 'Recurring');
       actionsCell.append(recurringLabel, rename, copy, action);
@@ -2105,6 +2123,44 @@ function savedMonthKeys(prefixes, inMemoryKeys) {
   return [...keys].filter(isMonthKey).sort();
 }
 
+function renderSavedMonths() {
+  const keys = savedMonthKeys([expensePrefix,cashPrefix], [...memory.keys(), ...cashMemory.keys()]).reverse();
+  const filter = savedMonthFilter.value;
+  const rows = document.createDocumentFragment();
+  const format = amount => amount === null ? '—' : money.format(amount / 100);
+  let count = 0;
+  for (const key of keys) {
+    const data = key === selectedMonth ? entries : readMonth(key, () => null);
+    const {estimated, actual} = monthlyAmounts(data);
+    if ((filter === 'actual' && actual === null) || (filter === 'no-actual' && actual !== null)) continue;
+    const row = document.createElement('tr');
+    const heading = appendText(row,'th','');
+    heading.scope = 'row';
+    const label = monthLabel.format(new Date(key + '-01T00:00:00Z'));
+    if (key === selectedMonth) {
+      row.setAttribute('aria-current','true');
+      heading.textContent = label;
+    } else {
+      const button = appendText(heading,'button',label);
+      button.type = 'button';
+      button.className = 'clear-expense-filters';
+      button.addEventListener('click', () => {
+        goToMonth(key);
+        month.focus();
+      });
+    }
+    appendText(row,'td',format(estimated));
+    appendText(row,'td',format(actual));
+    rows.append(row);
+    count++;
+  }
+  byId('saved-month-rows').replaceChildren(rows);
+  byId('saved-month-table').hidden = count === 0;
+  byId('saved-month-status').textContent = count === 0 ?
+    (keys.length ? 'No saved months match this view.' : 'Enter an expense or cash setting to save a month.') :
+    count + (count === 1 ? ' saved month.' : ' saved months.') + ' A dash marks a missing amount.';
+}
+
 function findHistoricalExpenses(query) {
   const matches = [];
   for (const key of savedMonthKeys([expensePrefix], [...memory.keys(), selectedMonth]).reverse()) {
@@ -2330,6 +2386,11 @@ byId('expense-history-form').addEventListener('submit', event => {
   renderExpenseHistory(byId('expense-history-query').value.trim().toLowerCase());
 });
 byId('cash-flow').hidden = false;
+savedMonths.hidden = false;
+savedMonths.addEventListener('toggle', () => {
+  if (savedMonths.open) renderSavedMonths();
+});
+savedMonthFilter.addEventListener('change', renderSavedMonths);
 scenarioAmount.addEventListener('input', () => {
   renderBillForecast(entries, recordedActual(entries), cashPlan);
 });
