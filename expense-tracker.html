@@ -22,6 +22,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .history-chart{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px}.history-chart li{display:grid;grid-template-columns:70px minmax(0,1fr) minmax(80px,auto);align-items:center;gap:8px}.history-chart strong{text-align:right;overflow-wrap:anywhere}.history-chart .selected-month{font-weight:750}.history-track{height:8px;border-radius:8px;background:#edf1e8}.history-bar{display:block;height:100%;border-radius:8px;background:#598568}.selected-month .history-bar{background:var(--green)}
 .cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
 .cash-forecast{margin:12px 0 0}.cash-forecast summary{cursor:pointer;color:var(--green);font-size:14px;font-weight:750}.cash-forecast .note{margin:6px 0}.cash-forecast .totals dd{overflow-wrap:anywhere}
+.reuse-cash-plan .add-row{margin-top:6px}
 .expense-scenario{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.expense-scenario h3{margin:0;font-size:14px}.expense-scenario .cash-inputs{margin:6px 0 10px}
 .year-overview .ledger{margin:8px 0}.year-overview table{min-width:660px;font-size:13px}.year-overview td{white-space:nowrap}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
 .year-overview .tracker-filter-select{margin:6px 0}.year-overview th small{display:block;font-weight:400;color:var(--muted)}
@@ -114,6 +115,15 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <div id="cash-actual-card"><dt>Left after actuals</dt><dd id="cash-actual">—</dd></div>
 <div id="cash-goal-card"><dt id="cash-goal-label">Savings target</dt><dd id="cash-goal">—</dd></div>
 </dl>
+<details class="cash-forecast reuse-cash-plan">
+<summary>Reuse cash settings from another month</summary>
+<p class="note">Fill blank income, savings target, and spending limits from a saved month.</p>
+<form class="add-row" id="reuse-cash-form">
+<label>Copy from <input type="month" id="reuse-cash-month" required></label>
+<button type="submit">Fill blank settings</button>
+</form>
+<p class="note" id="reuse-cash-status" role="status"></p>
+</details>
 <details class="cash-forecast">
 <summary>Forecast after unpaid bills</summary>
 <p class="note">Uses recorded actuals plus estimates for unpaid bills with a due date and no actual amount. Each expense is counted once.</p>
@@ -401,6 +411,8 @@ const cashInputs = {
   essentialsLimit:byId('essentials-limit'),
   otherLimit:byId('other-limit')
 };
+const reuseCashMonth = byId('reuse-cash-month');
+const reuseCashStatus = byId('reuse-cash-status');
 let cashPlan;
 let selectedMonth;
 let entries;
@@ -510,6 +522,27 @@ function loadCashPlan() {
     cashPlan[key] = input.validity.valid ? input.value : '';
     input.value = cashPlan[key];
   }
+}
+
+function saveCashPlan() {
+  cashMemory.set(selectedMonth, cashPlan);
+  writeSaved(cashPrefix + selectedMonth, cashPlan);
+  updateTotals();
+}
+
+function fillBlankCashSettings(source) {
+  let available = 0;
+  let copied = 0;
+  for (const [key,input] of Object.entries(cashInputs)) {
+    const amount = source?.[key];
+    if (amount === '' || !validBackupAmount(amount)) continue;
+    available++;
+    if (cashPlan[key] !== '') continue;
+    input.value = String(paise(amount) / 100);
+    cashPlan[key] = input.value;
+    copied++;
+  }
+  return {available,copied};
 }
 
 function appendText(row, tag, value) {
@@ -1491,6 +1524,9 @@ function selectMonth() {
   if (selectedMonth !== month.value) {
     billDateFilter = '';
     scenarioAmount.value = '';
+    reuseCashMonth.value = previousMonth(month.value);
+    reuseCashMonth.setCustomValidity('');
+    reuseCashStatus.textContent = '';
   }
   selectedMonth = month.value;
   entries = readMonth(selectedMonth);
@@ -2350,13 +2386,33 @@ calendarClear.addEventListener('click', () => {
   (byId('calendar-day-' + day) ?? billStatusFilter).focus();
 });
 byId('backup-tools').hidden = false;
+reuseCashMonth.addEventListener('input', () => {
+  reuseCashMonth.setCustomValidity('');
+  reuseCashStatus.textContent = '';
+});
+byId('reuse-cash-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const key = reuseCashMonth.value;
+  if (!isMonthKey(key) || key === selectedMonth) {
+    reuseCashMonth.setCustomValidity('Choose a valid source month different from the current month.');
+    reuseCashMonth.reportValidity();
+    return;
+  }
+  const source = cashMemory.get(key) ?? readSaved(cashPrefix + key);
+  const {available,copied} = fillBlankCashSettings(source);
+  if (copied > 0) {
+    saveCashPlan();
+    reuseCashStatus.textContent = copied === 1 ? 'Filled 1 blank setting.' : 'Filled ' + copied + ' blank settings.';
+  } else {
+    reuseCashStatus.textContent = available ? 'This month already has values for the available settings.' :
+      'The source month has no saved cash settings.';
+  }
+});
 for (const [key,input] of Object.entries(cashInputs)) {
   input.addEventListener('input', () => {
     if (!input.validity.valid) return;
     cashPlan[key] = input.value;
-    cashMemory.set(selectedMonth, cashPlan);
-    writeSaved(cashPrefix + selectedMonth, cashPlan);
-    updateTotals();
+    saveCashPlan();
   });
   input.addEventListener('blur', () => {
     if (!input.validity.valid) {
