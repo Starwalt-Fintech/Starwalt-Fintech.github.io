@@ -35,6 +35,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .recurring-control{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--green);padding:2px 4px}.recurring-control input{accent-color:var(--green);margin:0}
 .undo-remove{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#f6efdb;border-radius:7px;padding:7px 10px;margin:0 0 9px;font-size:13px}.undo-remove[hidden]{display:none}.undo-remove button{border:1px solid #a9b7a8;border-radius:6px;padding:4px 8px;background:#fff;color:var(--green);font-weight:700}
 .bill-schedule[hidden],#bill-schedule-grid[hidden]{display:none}.bill-schedule .ledger{margin-top:8px}.bill-schedule table{min-width:430px;font-size:13px}.bill-schedule button{border:1px solid #a9b7a8;border-radius:6px;padding:4px 8px;background:#fff;color:var(--green);font-size:12px;font-weight:700}.bill-schedule td:last-child{white-space:nowrap}.bill-schedule .bill-status{display:block;color:var(--muted)}
+.bill-payment-summary{margin:8px 0}.bill-payment-summary .totals{margin:0}.bill-payment-summary dd small{display:block;margin-top:3px;color:var(--muted);font-size:12px;font-weight:500}
 .expense-note{display:block;margin-top:2px;max-width:32ch;font-size:12px;font-weight:400;color:var(--muted);overflow-wrap:anywhere;white-space:pre-wrap}
 .expense-method{display:block;font-size:12px;font-weight:650;color:var(--green)}
 .rename-dialog textarea{box-sizing:border-box;width:100%;resize:vertical;padding:7px;border:1px solid #a9b7a8;border-radius:6px;font:inherit;color:var(--ink)}
@@ -227,6 +228,15 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </details>
 <details class="spending-insights bill-schedule" id="bill-schedule" hidden>
 <summary>Bill schedule</summary>
+<section class="bill-payment-summary" id="bill-payment-summary" aria-labelledby="bill-payment-heading" hidden>
+<h3 id="bill-payment-heading">Payment summary</h3>
+<dl class="totals">
+<div><dt>Paid (actual)</dt><dd><span id="bill-paid-amount"></span><small id="bill-paid-count"></small></dd></div>
+<div><dt>Outstanding</dt><dd><span id="bill-unpaid-amount"></span><small id="bill-unpaid-count"></small></dd></div>
+<div><dt>Of which overdue</dt><dd><span id="bill-overdue-amount"></span><small id="bill-overdue-count"></small></dd></div>
+</dl>
+<p>Includes all dated bills for this tracker month. Outstanding amounts use estimates when actuals are blank.</p>
+</section>
 <div id="bill-calendar" aria-labelledby="bill-calendar-month">
 <h3 id="bill-calendar-month"></h3>
 <p>Choose a date to show its bills. Shaded dates have unpaid bills.</p>
@@ -833,24 +843,17 @@ function renderBillSchedule() {
   const bills = datedBills(entries);
   const filter = billStatusFilter.value;
   renderBillCalendar(bills);
-  let pending = 0;
   visibleCalendarBills = [];
   byId('bill-calendar-export-status').textContent = '';
-  let unknown = 0;
-  let sum = 0;
   const today = new Date();
   const todayKey = dateKey(today);
   today.setDate(today.getDate() + 7);
   const soon = dateKey(today);
+  renderBillPaymentSummary(bills,todayKey);
   const rows = document.createDocumentFragment();
   for (const {key,index,entry} of bills) {
     const amount = billAmount(entry);
     const paid = entry.paid === true;
-    if (!paid) {
-      pending++;
-      if (amount === null) unknown++;
-      else sum += amount;
-    }
     const state = dueState(entry,todayKey,soon);
     if ((billDateFilter && entry.dueDate !== billDateFilter) || !matchesBillStatus(filter,paid,state)) continue;
     visibleCalendarBills.push({key,index,name:entry.name,date:entry.dueDate,paid});
@@ -874,13 +877,7 @@ function renderBillSchedule() {
     rows.append(row);
   }
 
-  const summary = byId('bill-schedule-total');
-  if (!bills.length) summary.textContent = 'Add a due date to an expense to see it here.';
-  else {
-    summary.textContent = pending + (pending === 1 ? ' unpaid bill' : ' unpaid bills') +
-      ' · ' + money.format(sum / 100) + ' with amounts entered' +
-      (unknown ? ' · ' + unknown + ' without an amount' : '');
-  }
+  byId('bill-schedule-total').textContent = bills.length ? '' : 'Add a due date to an expense to see it here.';
   byId('bill-schedule-rows').replaceChildren(rows);
   const shown = visibleCalendarBills.length;
   billCalendarDownload.disabled = shown === 0;
@@ -888,6 +885,37 @@ function renderBillSchedule() {
     ? 'Showing ' + shown + ' of ' + bills.length + ' dated bills.'
     : 'No bills match the selected filters.';
   byId('bill-schedule-grid').hidden = shown === 0;
+}
+
+function billPaymentSummary(bills,today) {
+  const summary = {
+    paid:{count:0, missing:0, amount:null},
+    unpaid:{count:0, missing:0, amount:null},
+    overdue:{count:0, missing:0, amount:null}
+  };
+  for (const {entry} of bills) {
+    const paid = entry.paid === true;
+    const amount = paid ? (entry.actual === '' ? null : paise(entry.actual)) : billAmount(entry);
+    const statuses = paid ? ['paid'] : ['unpaid'];
+    if (!paid && entry.dueDate < today) statuses.push('overdue');
+    for (const status of statuses) {
+      const bucket = summary[status];
+      bucket.count++;
+      if (amount === null) bucket.missing++;
+      else bucket.amount = (bucket.amount ?? 0) + amount;
+    }
+  }
+  return summary;
+}
+
+function renderBillPaymentSummary(bills,today) {
+  byId('bill-payment-summary').hidden = bills.length === 0;
+  for (const [status,{count, missing, amount}] of Object.entries(billPaymentSummary(bills,today))) {
+    const shownAmount = count === 0 ? 0 : amount;
+    byId('bill-' + status + '-amount').textContent = shownAmount === null ? '—' : money.format(shownAmount / 100);
+    byId('bill-' + status + '-count').textContent = count + (count === 1 ? ' bill' : ' bills') +
+      (missing ? ' · ' + missing + ' ' + (status === 'paid' ? 'without an actual' : 'without an amount') : '');
+  }
 }
 
 const calendarEncoder = new TextEncoder();
