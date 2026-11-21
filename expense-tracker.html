@@ -23,6 +23,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
 .cash-forecast{margin:12px 0 0}.cash-forecast summary{cursor:pointer;color:var(--green);font-size:14px;font-weight:750}.cash-forecast .note{margin:6px 0}.cash-forecast .totals dd{overflow-wrap:anywhere}
 .year-overview .ledger{margin:8px 0}.year-overview table{min-width:660px;font-size:13px}.year-overview td{white-space:nowrap}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
+.year-overview .tracker-filter-select{margin:6px 0}.year-overview th small{display:block;font-weight:400;color:var(--muted)}
 .backup-tools .month-tools{margin:9px 0 0}.backup-tools .status:empty{display:none}.backup-tools input{max-width:100%;font-size:13px}
 .expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
 .rename-dialog{border:1px solid var(--line);border-radius:12px;padding:18px;width:min(390px,calc(100% - 28px));color:var(--ink)}.rename-dialog::backdrop{background:#10252288}.rename-dialog h2{font-size:19px;margin:0 0 8px}.rename-dialog .add-row{margin:0}.rename-dialog .add-row label{width:100%}.rename-dialog .add-row button[type=button]{background:#edf1e8;color:var(--ink)}
@@ -169,10 +170,11 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </details>
 <details class="spending-insights year-overview" id="year-overview" hidden>
 <summary>Yearly expense summary</summary>
+<label class="tracker-filter-select">Group by <select id="year-group-by"><option value="month">Month</option><option value="quarter">Calendar quarter</option></select></label>
 <p id="year-note"></p>
-<div class="ledger" role="region" aria-label="Yearly expenses and cash flow by month" tabindex="0">
+<div class="ledger" role="region" aria-label="Yearly expenses and cash flow" tabindex="0">
 <table aria-label="Yearly expense summary">
-<thead><tr><th scope="col">Month</th><th scope="col">Estimated</th><th scope="col">Actual</th><th scope="col">Difference</th><th scope="col">Income</th><th scope="col">Savings target</th><th scope="col">Cash left</th></tr></thead>
+<thead><tr><th scope="col" id="year-period-heading">Month</th><th scope="col">Estimated</th><th scope="col">Actual</th><th scope="col">Difference</th><th scope="col">Income</th><th scope="col">Savings target</th><th scope="col">Cash left</th></tr></thead>
 <tbody id="year-months"></tbody>
 <tfoot><tr class="subtotal"><th scope="row">Year total</th><td id="year-estimated"></td><td id="year-actual"></td><td id="year-difference"></td><td id="year-income"></td><td id="year-target"></td><td id="year-cash-left"></td></tr></tfoot>
 </table>
@@ -349,6 +351,7 @@ for (const [value,label] of paymentMethods) {
 const removedByMonth = new Map();
 let renameTarget;
 const yearOverview = byId('year-overview');
+const yearGroupBy = byId('year-group-by');
 const compareMonths = byId('compare-months');
 const compareMonth = byId('compare-month');
 let comparisonReference;
@@ -1488,18 +1491,44 @@ function budgetDifference(estimated, actual) {
   return estimated === null && actual === null ? null : (estimated ?? 0) - (actual ?? 0);
 }
 
+function calendarQuarters(summary) {
+  const ranges = ['Jan–Mar','Apr–Jun','Jul–Sep','Oct–Dec'];
+  return ranges.map((range,index) => {
+    const key = 'Q' + (index + 1);
+    const months = summary.months.slice(index * 3,index * 3 + 3);
+    const totals = {};
+    for (const field of Object.keys(summary.totals)) {
+      const recorded = months.map(month => month[field]).filter(value => value !== null);
+      totals[field] = recorded.length === 0 ? null : recorded.reduce((sum,value) => sum + value,0);
+    }
+    return {
+      key, label:key + ' · ' + range, monthKeys:months.map(month => month.key),
+      actualMonths:months.filter(month => month.actual !== null).length,
+      ...totals
+    };
+  });
+}
+
 function renderYear() {
-  const {year, months, totals} = yearSummary();
+  const summary = yearSummary();
+  const {year, months, totals} = summary;
+  const quarterly = yearGroupBy.value === 'quarter';
   const cashMonths = months.filter(month => month.cashLeft !== null).length;
   byId('year-note').textContent = 'Calendar year ' + year +
     '. A dash marks missing data. Cash left is income minus actual spending. ' +
-    'The cash-left total includes ' + cashMonths + ' of 12 months with both amounts recorded.';
+    'The cash-left total includes ' + cashMonths + ' of 12 months with both amounts recorded.' +
+    (quarterly ? ' Each quarter shows how many months have actual spending recorded.' : '');
+  byId('year-period-heading').textContent = quarterly ? 'Quarter' : 'Month';
+  byId('export-year').textContent = quarterly ? 'Download quarterly summary (CSV)' : 'Download yearly summary (CSV)';
   const format = amount => amount === null ? '—' : money.format(amount / 100);
   const rows = document.createDocumentFragment();
-  for (const {key, estimated, actual, income, target, cashLeft} of months) {
+  const periods = quarterly ? calendarQuarters(summary) : months;
+  for (const {key, label, monthKeys, actualMonths, estimated, actual, income, target, cashLeft} of periods) {
     const row = document.createElement('tr');
-    if (key === selectedMonth) row.setAttribute('aria-current','true');
-    appendText(row,'th',historyLabel.format(new Date(key + '-01T00:00:00Z'))).scope = 'row';
+    if (quarterly ? monthKeys.includes(selectedMonth) : key === selectedMonth) row.setAttribute('aria-current','true');
+    const heading = appendText(row,'th',quarterly ? label : historyLabel.format(new Date(key + '-01T00:00:00Z')));
+    heading.scope = 'row';
+    if (quarterly) appendText(heading,'small',actualMonths + ' of 3 months recorded');
     appendText(row,'td',format(estimated));
     appendText(row,'td',format(actual));
     difference(appendText(row,'td',''), budgetDifference(estimated,actual));
@@ -1516,15 +1545,18 @@ function renderYear() {
   difference(byId('year-cash-left'), totals.cashLeft);
 }
 
-function yearlyCsv(summary) {
+function yearlyCsv(summary, quarterly = false) {
   const format = (value) => value === null ? '' : (value / 100).toFixed(2);
-  const row = (label, {estimated, actual, income, target, cashLeft}) => [
-    label, ...[estimated,actual,budgetDifference(estimated,actual),income,target,cashLeft].map(format)
+  const row = (label, {estimated, actual, income, target, cashLeft}, coverage) => [
+    label, ...[estimated,actual,budgetDifference(estimated,actual),income,target,cashLeft].map(format),
+    ...(quarterly ? [coverage] : [])
   ].join(',');
+  const periods = quarterly ? calendarQuarters(summary) : summary.months;
   return [
-    'Month,Estimated (INR),Actual (INR),Difference (INR),Income (INR),Savings target (INR),Cash left (INR)',
-    ...summary.months.map(amounts => row(amounts.key, amounts)),
-    row('Year total', summary.totals)
+    (quarterly ? 'Quarter' : 'Month') + ',Estimated (INR),Actual (INR),Difference (INR),Income (INR),Savings target (INR),Cash left (INR)' +
+      (quarterly ? ',Months with actual spending' : ''),
+    ...periods.map(amounts => row(quarterly ? summary.year + '-' + amounts.key : amounts.key, amounts, amounts.actualMonths)),
+    row('Year total', summary.totals, summary.months.filter(month => month.actual !== null).length)
   ].join('\r\n') + '\r\n';
 }
 
@@ -1555,8 +1587,11 @@ exportFilteredExpenses.addEventListener('click', () => {
 });
 byId('export-year').addEventListener('click', () => {
   const summary = yearSummary();
-  downloadCsv(yearlyCsv(summary), 'starwalt-expense-summary-' + summary.year + '.csv');
+  const quarterly = yearGroupBy.value === 'quarter';
+  const name = quarterly ? 'starwalt-quarterly-expense-summary-' : 'starwalt-expense-summary-';
+  downloadCsv(yearlyCsv(summary, quarterly), name + summary.year + '.csv');
 });
+yearGroupBy.addEventListener('change', renderYear);
 yearOverview.addEventListener('toggle', () => {
   if (yearOverview.open) renderYear();
 });
