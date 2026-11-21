@@ -262,6 +262,16 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </table>
 </div>
 </details>
+<details class="spending-insights bill-schedule" id="recurring-review" hidden>
+<summary>Recurring bill review</summary>
+<p id="recurring-review-note"></p>
+<div class="ledger" id="recurring-review-table" role="region" aria-label="Recurring bills compared with last month" tabindex="0" hidden>
+<table>
+<thead><tr><th scope="col">Bill</th><th scope="col">Last month</th><th scope="col">Selected month</th><th scope="col">Change</th></tr></thead>
+<tbody id="recurring-review-rows"></tbody>
+</table>
+</div>
+</details>
 <details class="spending-insights" id="month-review" hidden>
 <summary>Month-end checklist</summary>
 <div class="month-review-list">
@@ -387,6 +397,7 @@ const compareMonths = byId('compare-months');
 const compareMonth = byId('compare-month');
 let comparisonReference;
 const billSchedule = byId('bill-schedule');
+const recurringReview = byId('recurring-review');
 const billStatusFilter = byId('bill-status-filter');
 const calendarClear = byId('bill-calendar-clear');
 let billDateFilter = '';
@@ -1114,6 +1125,7 @@ function updateTotals() {
   if (compareMonths.open) renderMonthComparison();
   updateFilteredSubtotal();
   if (billSchedule.open) renderBillSchedule();
+  if (recurringReview.open) renderRecurringReview();
 }
 
 function renderUndo() {
@@ -1257,6 +1269,7 @@ function render() {
         if (recurring.checked && entry.dueDate) entry.billingDay = Number(entry.dueDate.slice(-2));
         else delete entry.billingDay;
         saveMonth();
+        if (recurringReview.open) renderRecurringReview();
       });
       recurringLabel.append(recurring, 'Recurring');
       actionsCell.append(recurringLabel, rename, action);
@@ -1386,8 +1399,7 @@ function dueDateForMonth(key, day) {
   return key + '-' + String(Math.min(day, end.getUTCDate())).padStart(2,'0');
 }
 
-function bringRecurring(current, previous, key) {
-  let count = 0;
+function* recurringBillPairs(current, previous) {
   for (const group of Object.keys(groups)) {
     const matches = new Map();
     for (const entry of current[group]) {
@@ -1395,26 +1407,71 @@ function bringRecurring(current, previous, key) {
       if (!matches.has(name)) matches.set(name, []);
       matches.get(name).push(entry);
     }
-    for (const source of previous[group]) {
+    for (const source of previous?.[group] ?? []) {
       if (source.recurring !== true) continue;
-      let target = matches.get(source.name.toLowerCase())?.shift();
-      if (target?.recurring === true) continue;
-      if (!target) {
-        target = {name:source.name, estimated:'', actual:''};
-        current[group].push(target);
-      }
-      target.recurring = true;
-      if (target.estimated === '') target.estimated = source.estimated;
-      if (target.dueDate) {
-        target.billingDay = Number(target.dueDate.slice(-2));
-      } else if (source.billingDay || source.dueDate) {
-        target.billingDay = source.billingDay ?? Number(source.dueDate.slice(-2));
-        target.dueDate = dueDateForMonth(key, target.billingDay);
-      }
-      count++;
+      const target = matches.get(source.name.toLowerCase())?.shift();
+      yield {group, source, target};
     }
   }
+}
+
+function bringRecurring(current, previous, key) {
+  let count = 0;
+  for (const pair of recurringBillPairs(current, previous)) {
+    const {group, source} = pair;
+    let {target} = pair;
+    if (target?.recurring === true) continue;
+    if (!target) {
+      target = {name:source.name, estimated:'', actual:''};
+      current[group].push(target);
+    }
+    target.recurring = true;
+    if (target.estimated === '') target.estimated = source.estimated;
+    if (target.dueDate) {
+      target.billingDay = Number(target.dueDate.slice(-2));
+    } else if (source.billingDay || source.dueDate) {
+      target.billingDay = source.billingDay ?? Number(source.dueDate.slice(-2));
+      target.dueDate = dueDateForMonth(key, target.billingDay);
+    }
+    count++;
+  }
   return count;
+}
+
+function recurringBillCost(entry) {
+  if (entry.actual !== '') return {kind:'Actual', amount:paise(entry.actual)};
+  if (entry.estimated !== '') return {kind:'Estimate', amount:paise(entry.estimated)};
+  return null;
+}
+
+function renderRecurringReview() {
+  const previous = readMonth(previousMonth(selectedMonth), () => null);
+  const pairs = [...recurringBillPairs(entries, previous)];
+  const rows = document.createDocumentFragment();
+  let toSetUp = 0;
+  const format = cost => cost ? money.format(cost.amount / 100) + ' · ' + cost.kind : '—';
+  for (const {group,source,target} of pairs) {
+    const row = document.createElement('tr');
+    const name = appendText(row,'th',source.name);
+    name.scope = 'row';
+    appendText(name,'small',groups[group].name).className = 'bill-status';
+    const prior = recurringBillCost(source);
+    const current = target ? recurringBillCost(target) : null;
+    if (target?.recurring !== true) toSetUp++;
+    appendText(row,'td',format(prior));
+    const currentCell = appendText(row,'td',target ? format(current) : 'Missing');
+    if (target && !target.recurring) appendText(currentCell,'small','Recurring flag off').className = 'bill-status';
+    const delta = prior && current && prior.kind === current.kind ? current.amount - prior.amount : null;
+    const change = appendText(row,'td',delta === null ? '—' : money.format(delta / 100));
+    change.classList.toggle('negative',delta > 0);
+    change.classList.toggle('positive',delta < 0);
+    rows.append(row);
+  }
+  byId('recurring-review-rows').replaceChildren(rows);
+  byId('recurring-review-table').hidden = pairs.length === 0;
+  byId('recurring-review-note').textContent = pairs.length === 0 ? 'No bills were marked recurring last month.' :
+    (toSetUp ? toSetUp + ' to set up as recurring this month. Use Bring in recurring bills to set them up. ' : '') +
+    'Matches by expense name and group. Changes compare two actuals or two estimates.';
 }
 
 byId('copy-recurring').addEventListener('click', () => {
@@ -1996,6 +2053,10 @@ scenarioAmount.addEventListener('blur', () => {
 byId('group-limits').hidden = false;
 yearOverview.hidden = false;
 billSchedule.hidden = false;
+recurringReview.hidden = false;
+recurringReview.addEventListener('toggle', () => {
+  if (recurringReview.open) renderRecurringReview();
+});
 billSchedule.addEventListener('toggle', () => {
   if (billSchedule.open) renderBillSchedule();
 });
