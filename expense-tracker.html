@@ -22,6 +22,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .history-chart{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px}.history-chart li{display:grid;grid-template-columns:70px minmax(0,1fr) minmax(80px,auto);align-items:center;gap:8px}.history-chart strong{text-align:right;overflow-wrap:anywhere}.history-chart .selected-month{font-weight:750}.history-track{height:8px;border-radius:8px;background:#edf1e8}.history-bar{display:block;height:100%;border-radius:8px;background:#598568}.selected-month .history-bar{background:var(--green)}
 .cash-flow[hidden]{display:none}.cash-flow{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 16px}.cash-flow h2{margin:0 0 4px;font-size:17px}.cash-flow .note{margin:0 0 10px}.cash-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}.cash-inputs label{font-size:13px;font-weight:700}.cash-inputs input{display:block;width:100%;max-width:none;margin-top:3px;text-align:left}.cash-flow .totals{margin:0}.cash-flow .totals dd{font-size:clamp(14px,2vw,19px)}
 .cash-forecast{margin:12px 0 0}.cash-forecast summary{cursor:pointer;color:var(--green);font-size:14px;font-weight:750}.cash-forecast .note{margin:6px 0}.cash-forecast .totals dd{overflow-wrap:anywhere}
+.expense-scenario{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.expense-scenario h3{margin:0;font-size:14px}.expense-scenario .cash-inputs{margin:6px 0 10px}
 .year-overview .ledger{margin:8px 0}.year-overview table{min-width:660px;font-size:13px}.year-overview td{white-space:nowrap}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
 .year-overview .tracker-filter-select{margin:6px 0}.year-overview th small{display:block;font-weight:400;color:var(--muted)}
 #year-comparison-table table{min-width:450px}
@@ -119,6 +120,18 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <div id="forecast-target-card"><dt>Projected vs. savings target</dt><dd id="forecast-target">—</dd></div>
 </dl>
 <p class="note" id="forecast-note"></p>
+<section class="expense-scenario" aria-labelledby="scenario-heading">
+<h3 id="scenario-heading">What-if expense planner</h3>
+<p class="note">Try a one-time cost outside the current forecast. This amount is temporary and clears when you change months.</p>
+<div class="cash-inputs">
+<label>Extra expense (₹)<input class="amount" type="number" inputmode="decimal" id="scenario-amount" min="0" max="1000000000" step=".01" autocomplete="off"></label>
+</div>
+<dl class="totals" aria-label="What-if results" aria-live="polite">
+<div><dt>Room for extras before target</dt><dd id="scenario-room">—</dd></div>
+<div id="scenario-cash-card"><dt>Cash left after extra expense</dt><dd id="scenario-cash">—</dd></div>
+<div id="scenario-target-card"><dt>Cash vs. savings target</dt><dd id="scenario-target">—</dd></div>
+</dl>
+</section>
 </details>
 </section>
 <details class="spending-insights" id="group-limits" hidden>
@@ -309,6 +322,7 @@ const groups = {
 };
 const money = new Intl.NumberFormat('en-IN', {style:'currency',currency:'INR',minimumFractionDigits:0,maximumFractionDigits:2});
 const month = byId('month');
+const scenarioAmount = byId('scenario-amount');
 const status = byId('storage-status');
 const memory = new Map();
 const cashMemory = new Map();
@@ -676,6 +690,15 @@ function unpaidBillReserve(data) {
   return {reserve, estimatedBills, missingBills};
 }
 
+function renderExpenseScenario(projected, targetGap) {
+  const extra = scenarioAmount.value === '' || !scenarioAmount.validity.valid ? null : paise(scenarioAmount.value);
+  const afterExtra = projected === null || extra === null ? null : projected - extra;
+  const afterTarget = targetGap === null || extra === null ? null : targetGap - extra;
+  byId('scenario-room').textContent = targetGap === null ? '—' : money.format(Math.max(0,targetGap) / 100);
+  difference(byId('scenario-cash-card'), afterExtra, byId('scenario-cash'));
+  difference(byId('scenario-target-card'), afterTarget, byId('scenario-target'));
+}
+
 function renderBillForecast(data, actual, cash) {
   const {reserve, estimatedBills, missingBills} = unpaidBillReserve(data);
   const projected = cash.income === '' || (actual === null && reserve === null)
@@ -685,6 +708,7 @@ function renderBillForecast(data, actual, cash) {
   byId('forecast-set-aside').textContent = money.format((reserve ?? 0) / 100);
   difference(byId('forecast-cash-card'), projected, byId('forecast-cash'));
   difference(byId('forecast-target-card'), gap, byId('forecast-target'));
+  renderExpenseScenario(projected, gap);
   const notes = [estimatedBills === 1 ? 'Includes 1 bill estimate.' : 'Includes ' + estimatedBills + ' bill estimates.'];
   if (missingBills > 0) {
     notes.push(missingBills === 1 ? '1 dated bill needs an amount.' : missingBills + ' dated bills need amounts.');
@@ -1231,7 +1255,10 @@ function selectMonth() {
     return;
   }
   byId('month-action').textContent = '';
-  if (selectedMonth !== month.value) billDateFilter = '';
+  if (selectedMonth !== month.value) {
+    billDateFilter = '';
+    scenarioAmount.value = '';
+  }
   selectedMonth = month.value;
   entries = readMonth(selectedMonth);
   loadCashPlan();
@@ -1932,6 +1959,12 @@ byId('expense-history-form').addEventListener('submit', event => {
   renderExpenseHistory(byId('expense-history-query').value.trim().toLowerCase());
 });
 byId('cash-flow').hidden = false;
+scenarioAmount.addEventListener('input', () => {
+  renderBillForecast(entries, recordedActual(entries), cashPlan);
+});
+scenarioAmount.addEventListener('blur', () => {
+  if (!scenarioAmount.validity.valid) scenarioAmount.reportValidity();
+});
 byId('group-limits').hidden = false;
 yearOverview.hidden = false;
 billSchedule.hidden = false;
