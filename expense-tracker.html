@@ -272,6 +272,19 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </table>
 </div>
 </details>
+<details class="spending-insights bill-schedule" id="unpaid-history" hidden>
+<summary>Unpaid bills across months</summary>
+<label class="tracker-filter-select">Due date <select id="unpaid-history-filter">
+<option value="all">All dates</option><option value="overdue">Overdue</option><option value="upcoming">Next 30 days, including today</option>
+</select></label>
+<p id="unpaid-history-status" role="status"></p>
+<div class="ledger" id="unpaid-history-table" role="region" aria-label="Unpaid bills across saved months" tabindex="0" hidden>
+<table>
+<thead><tr><th scope="col">Bill</th><th scope="col">Due date</th><th scope="col">Amount</th><th scope="col">Tracker month</th></tr></thead>
+<tbody id="unpaid-history-rows"></tbody>
+</table>
+</div>
+</details>
 <details class="spending-insights" id="month-review" hidden>
 <summary>Month-end checklist</summary>
 <div class="month-review-list">
@@ -398,6 +411,8 @@ const compareMonth = byId('compare-month');
 let comparisonReference;
 const billSchedule = byId('bill-schedule');
 const recurringReview = byId('recurring-review');
+const unpaidHistory = byId('unpaid-history');
+const unpaidHistoryFilter = byId('unpaid-history-filter');
 const billStatusFilter = byId('bill-status-filter');
 const calendarClear = byId('bill-calendar-clear');
 let billDateFilter = '';
@@ -789,6 +804,61 @@ function billAmount(entry) {
   return amount === '' ? null : paise(amount);
 }
 
+function unpaidBillsAcrossMonths(filter, today, through) {
+  const bills = [];
+  for (const key of savedMonthKeys([expensePrefix], [...memory.keys(), selectedMonth])) {
+    const data = key === selectedMonth ? entries : readMonth(key, () => null);
+    if (!data) continue;
+    for (const {entry, key:group} of datedBills(data)) {
+      if (entry.paid === true) continue;
+      if (filter === 'overdue' && entry.dueDate >= today) continue;
+      if (filter === 'upcoming' && (entry.dueDate < today || entry.dueDate > through)) continue;
+      bills.push({entry, key, group, amount:billAmount(entry)});
+    }
+  }
+  return bills.sort((left,right) => left.entry.dueDate.localeCompare(right.entry.dueDate));
+}
+
+function renderUnpaidHistory() {
+  const date = new Date();
+  const today = dateKey(date);
+  date.setDate(date.getDate() + 29);
+  const bills = unpaidBillsAcrossMonths(unpaidHistoryFilter.value,today,dateKey(date));
+  const rows = document.createDocumentFragment();
+  let known = 0;
+  let total = 0;
+  for (const {entry,key,group,amount} of bills) {
+    const row = document.createElement('tr');
+    const name = appendText(row,'th',entry.name);
+    name.scope = 'row';
+    appendText(name,'small',groups[group].name).className = 'bill-status';
+    const due = appendText(row,'td',billDateFormat.format(new Date(entry.dueDate + 'T00:00:00Z')));
+    if (entry.dueDate < today) appendText(due,'small','Overdue').className = 'bill-status';
+    const amountCell = appendText(row,'td',amount === null ? '—' : money.format(amount / 100));
+    if (amount !== null) {
+      known++;
+      total += amount;
+      if (entry.actual === '') appendText(amountCell,'small','Estimate').className = 'bill-status';
+    }
+    const label = historyLabel.format(new Date(key + '-01T00:00:00Z'));
+    const action = appendText(appendText(row,'td',''),'button',label);
+    action.type = 'button';
+    action.setAttribute('aria-label','Open ' + label + ' expenses');
+    action.addEventListener('click', () => {
+      goToMonth(key);
+      month.focus();
+    });
+    rows.append(row);
+  }
+  byId('unpaid-history-rows').replaceChildren(rows);
+  byId('unpaid-history-table').hidden = bills.length === 0;
+  const missing = bills.length - known;
+  byId('unpaid-history-status').textContent = bills.length === 0 ? 'No unpaid dated bills match this view.' :
+    bills.length + (bills.length === 1 ? ' bill' : ' bills') +
+    (known ? ' · ' + money.format(total / 100) + ' total with amounts entered' : '') +
+    (missing ? ' · ' + missing + ' without an amount' : '');
+}
+
 function renderBillCalendar(bills) {
   const first = new Date(selectedMonth + '-01T00:00:00Z');
   const last = new Date(first);
@@ -1126,6 +1196,7 @@ function updateTotals() {
   updateFilteredSubtotal();
   if (billSchedule.open) renderBillSchedule();
   if (recurringReview.open) renderRecurringReview();
+  if (unpaidHistory.open) renderUnpaidHistory();
 }
 
 function renderUndo() {
@@ -2054,6 +2125,11 @@ byId('group-limits').hidden = false;
 yearOverview.hidden = false;
 billSchedule.hidden = false;
 recurringReview.hidden = false;
+unpaidHistory.hidden = false;
+unpaidHistory.addEventListener('toggle', () => {
+  if (unpaidHistory.open) renderUnpaidHistory();
+});
+unpaidHistoryFilter.addEventListener('change', renderUnpaidHistory);
 recurringReview.addEventListener('toggle', () => {
   if (recurringReview.open) renderRecurringReview();
 });
