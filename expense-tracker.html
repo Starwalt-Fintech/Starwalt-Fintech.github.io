@@ -55,6 +55,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .compare-months{margin-top:8px}.compare-months summary{cursor:pointer;font-weight:750;color:var(--green)}.compare-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0;font-size:13px}.compare-controls input,.compare-controls button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:4px 7px;font:inherit}.compare-months .ledger{margin:8px 0}.compare-months table{min-width:445px;font-size:13px}
 .expense-sort{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.filtered-subtotal{width:100%;margin:0;color:var(--green);font-size:13px;font-weight:700}
 .expense-history .add-row{margin:8px 0}.expense-history .ledger{margin-top:8px}.expense-history table{min-width:470px;font-size:13px}.expense-history td{white-space:nowrap}.expense-history .history-month-button{border:0;background:transparent;color:var(--green);font:inherit;text-decoration:underline;padding:4px;cursor:pointer}
+.month-review-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:8px;margin-top:8px}.month-review-list section{border:1px solid var(--line);border-radius:8px;padding:8px 10px}.month-review-list h3{margin:0}.month-review-list button{margin-top:4px}
 </style>
 <style id="monthly-print-style">
 .monthly-print-report{display:none}
@@ -229,11 +230,20 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </table>
 </div>
 </details>
+<details class="spending-insights" id="month-review" hidden>
+<summary>Month-end checklist</summary>
+<div class="month-review-list">
+<section><h3>Missing actuals</h3><p id="review-missing"></p><button type="button" class="clear-expense-filters" id="review-missing-button" hidden>Review missing amounts</button></section>
+<section><h3>Overdue bills</h3><p id="review-overdue"></p><button type="button" class="clear-expense-filters" id="review-overdue-button" hidden>Review overdue bills</button></section>
+<section><h3>Budget check</h3><p id="review-budget"></p><button type="button" class="clear-expense-filters" id="review-budget-button" hidden>Review over-budget rows</button></section>
+</div>
+</details>
 <div class="expense-filter" id="expense-filter" hidden>
 <label class="expense-search">Find an expense <input type="search" id="expense-search" placeholder="Name, notes, or method"></label>
 <label><input type="checkbox" id="over-budget-only">Show over-budget expenses only</label>
 <label><input type="checkbox" id="unpaid-only">Show unpaid expenses only</label>
 <label><input type="checkbox" id="overdue-only">Show overdue expenses only</label>
+<label><input type="checkbox" id="missing-actual-only">Show missing actual amounts only</label>
 <label class="tracker-filter-select">Filter by payment method<select id="expense-method-filter">
 <option value="all">All methods</option><option value="">Unspecified</option>
 </select></label>
@@ -309,6 +319,8 @@ const monthLabel = new Intl.DateTimeFormat('en-IN', {month:'long',year:'numeric'
 const overBudgetOnly = byId('over-budget-only');
 const unpaidOnly = byId('unpaid-only');
 const overdueOnly = byId('overdue-only');
+const missingActualOnly = byId('missing-actual-only');
+const expenseFilterCheckboxes = [overBudgetOnly,unpaidOnly,overdueOnly,missingActualOnly];
 const expenseSearch = byId('expense-search');
 const renameDialog = byId('rename-dialog');
 const renameName = byId('rename-name');
@@ -477,16 +489,17 @@ function applyExpenseFilter() {
   const method = expenseMethodFilter.value;
   const group = expenseGroupFilter.value;
   const active = Boolean(query) || method !== 'all' || group !== 'all' ||
-    overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked;
+    expenseFilterCheckboxes.some(checkbox => checkbox.checked);
   let count = 0;
   for (const row of document.querySelectorAll('.entry')) {
     const isOverBudget = row.querySelector('.difference').classList.contains('negative');
     const matchesExpense = row.dataset.searchText.includes(query);
     const matchesPayment = !unpaidOnly.checked || row.classList.contains('payment-pending');
     const matchesDue = !overdueOnly.checked || row.classList.contains('payment-overdue');
+    const matchesMissing = !missingActualOnly.checked || row.classList.contains('missing-actual');
     const matchesMethod = method === 'all' || row.dataset.paymentMethod === method;
     const matchesGroup = group === 'all' || row.parentElement.id === group;
-    row.hidden = !matchesExpense || !matchesPayment || !matchesDue || !matchesMethod || !matchesGroup ||
+    row.hidden = !matchesExpense || !matchesPayment || !matchesDue || !matchesMissing || !matchesMethod || !matchesGroup ||
       (overBudgetOnly.checked && !isOverBudget);
     if (!row.hidden) count++;
   }
@@ -496,6 +509,13 @@ function applyExpenseFilter() {
   byId('filter-status').textContent = active
     ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
+}
+
+function resetExpenseFilters() {
+  expenseSearch.value = '';
+  expenseMethodFilter.value = 'all';
+  expenseGroupFilter.value = 'all';
+  for (const checkbox of expenseFilterCheckboxes) checkbox.checked = false;
 }
 
 function expenseSearchText(entry) {
@@ -930,6 +950,28 @@ function renderMonthComparison() {
   byId('compare-month-rows').replaceChildren(rows);
 }
 
+function renderMonthReview({tracked, missing, overdue, estimated, actual, overBudget}) {
+  let missingText = 'Add an expense to start the checklist.';
+  if (tracked > 0) {
+    missingText = missing === 0 ? 'All tracked expenses have actual amounts.' :
+      missing + ' of ' + tracked + ' tracked expenses need an actual amount.';
+  }
+  byId('review-missing').textContent = missingText;
+  byId('review-missing-button').hidden = missing === 0;
+  byId('review-overdue').textContent = overdue === 0 ? 'No overdue bills.' :
+    overdue + (overdue === 1 ? ' bill is overdue.' : ' bills are overdue.');
+  byId('review-overdue-button').hidden = overdue === 0;
+
+  let budgetText = 'Add estimates and actual amounts to compare.';
+  if (actual !== null && estimated !== null) {
+    const gap = estimated - actual;
+    budgetText = gap === 0 ? 'Recorded spending matches the budget.' :
+      'Recorded spending is ' + money.format(Math.abs(gap) / 100) + (gap < 0 ? ' over budget.' : ' under budget.');
+  }
+  byId('review-budget').textContent = budgetText;
+  byId('review-budget-button').hidden = overBudget === 0;
+}
+
 function updateTotals() {
   let estimated = 0;
   let actual = 0;
@@ -940,6 +982,8 @@ function updateTotals() {
   let pendingCount = 0;
   let overdueCount = 0;
   let upcomingCount = 0;
+  let missingCount = 0;
+  let hasEstimate = false;
   const nextWeek = new Date();
   const today = dateKey(nextWeek);
   nextWeek.setDate(nextWeek.getDate() + 7);
@@ -950,6 +994,7 @@ function updateTotals() {
     entries[key].forEach((entry, index) => {
       const planned = paise(entry.estimated);
       const spent = paise(entry.actual);
+      if (entry.estimated !== '') hasEstimate = true;
       groupEstimated += planned;
       groupActual += spent;
       if (entry.actual !== '') {
@@ -960,7 +1005,11 @@ function updateTotals() {
       const delta = byId(key + '-difference-' + index);
       difference(delta, entry.estimated || entry.actual ? planned - spent : null);
       const paid = entry.paid === true;
-      const pending = !paid && isTrackedExpense(entry);
+      const tracked = isTrackedExpense(entry);
+      const pending = !paid && tracked;
+      const missing = tracked && entry.actual === '';
+      delta.parentElement.classList.toggle('missing-actual', missing);
+      if (missing) missingCount++;
       delta.parentElement.classList.toggle('payment-pending', pending);
       if (paid) paidCount++;
       if (pending) pendingCount++;
@@ -991,6 +1040,10 @@ function updateTotals() {
   renderPaymentMethods(methodTotals);
   renderGroupLimits(groupActuals);
   renderOverruns(overruns);
+  renderMonthReview({
+    tracked:paidCount + pendingCount, missing:missingCount, overdue:overdueCount,
+    estimated:hasEstimate ? estimated : null, actual:currentActual, overBudget:overruns.length
+  });
   byId('payment-progress').textContent = paidCount + ' paid · ' + pendingCount +
     ' pending · ' + overdueCount + ' overdue · ' + upcomingCount + ' due within 7 days (including today).';
   updateCashFlow(estimated, actual);
@@ -1062,7 +1115,7 @@ function render() {
             input.reportValidity();
             input.value = entry[field];
           }
-          if (overBudgetOnly.checked || unpaidOnly.checked || overdueOnly.checked) applyExpenseFilter();
+          if (expenseFilterCheckboxes.some(checkbox => checkbox.checked)) applyExpenseFilter();
         });
         row.insertCell().append(input);
       }
@@ -1735,6 +1788,18 @@ byId('compare-previous').addEventListener('click', () => {
   renderMonthComparison();
 });
 byId('expense-filter').hidden = false;
+byId('month-review').hidden = false;
+for (const [button, checkbox] of [
+  ['review-missing-button',missingActualOnly], ['review-overdue-button',overdueOnly], ['review-budget-button',overBudgetOnly]
+]) {
+  byId(button).addEventListener('click', () => {
+    resetExpenseFilters();
+    checkbox.checked = true;
+    updateTotals();
+    applyExpenseFilter();
+    checkbox.focus();
+  });
+}
 byId('spending-insights').hidden = false;
 byId('expense-history').hidden = false;
 byId('expense-history-form').addEventListener('submit', event => {
@@ -1773,6 +1838,7 @@ for (const [key,input] of Object.entries(cashInputs)) {
 }
 overBudgetOnly.addEventListener('change', applyExpenseFilter);
 unpaidOnly.addEventListener('change', applyExpenseFilter);
+missingActualOnly.addEventListener('change', applyExpenseFilter);
 overdueOnly.addEventListener('change', () => {
   updateTotals();
   applyExpenseFilter();
@@ -1786,10 +1852,7 @@ byId('apply-expense-sort').addEventListener('click', () => {
   sortExpenseRows();
 });
 byId('clear-expense-filters').addEventListener('click', () => {
-  expenseSearch.value = '';
-  expenseMethodFilter.value = 'all';
-  expenseGroupFilter.value = 'all';
-  for (const checkbox of [overBudgetOnly,unpaidOnly,overdueOnly]) checkbox.checked = false;
+  resetExpenseFilters();
   applyExpenseFilter();
   expenseSearch.focus();
 });
