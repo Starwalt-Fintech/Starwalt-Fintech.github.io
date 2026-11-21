@@ -24,6 +24,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .cash-forecast{margin:12px 0 0}.cash-forecast summary{cursor:pointer;color:var(--green);font-size:14px;font-weight:750}.cash-forecast .note{margin:6px 0}.cash-forecast .totals dd{overflow-wrap:anywhere}
 .year-overview .ledger{margin:8px 0}.year-overview table{min-width:660px;font-size:13px}.year-overview td{white-space:nowrap}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
 .year-overview .tracker-filter-select{margin:6px 0}.year-overview th small{display:block;font-weight:400;color:var(--muted)}
+#year-comparison-table table{min-width:450px}
 .backup-tools .month-tools{margin:9px 0 0}.backup-tools .status:empty{display:none}.backup-tools input{max-width:100%;font-size:13px}
 .expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
 .rename-dialog{border:1px solid var(--line);border-radius:12px;padding:18px;width:min(390px,calc(100% - 28px));color:var(--ink)}.rename-dialog::backdrop{background:#10252288}.rename-dialog h2{font-size:19px;margin:0 0 8px}.rename-dialog .add-row{margin:0}.rename-dialog .add-row label{width:100%}.rename-dialog .add-row button[type=button]{background:#edf1e8;color:var(--ink)}
@@ -170,13 +171,19 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </details>
 <details class="spending-insights year-overview" id="year-overview" hidden>
 <summary>Yearly expense summary</summary>
-<label class="tracker-filter-select">Group by <select id="year-group-by"><option value="month">Month</option><option value="quarter">Calendar quarter</option></select></label>
+<label class="tracker-filter-select">View <select id="year-group-by"><option value="month">Month</option><option value="quarter">Calendar quarter</option><option value="year-over-year">Year-over-year spending</option></select></label>
 <p id="year-note"></p>
-<div class="ledger" role="region" aria-label="Yearly expenses and cash flow" tabindex="0">
+<div class="ledger" id="year-summary-table" role="region" aria-label="Yearly expenses and cash flow" tabindex="0">
 <table aria-label="Yearly expense summary">
 <thead><tr><th scope="col" id="year-period-heading">Month</th><th scope="col">Estimated</th><th scope="col">Actual</th><th scope="col">Difference</th><th scope="col">Income</th><th scope="col">Savings target</th><th scope="col">Cash left</th></tr></thead>
 <tbody id="year-months"></tbody>
 <tfoot><tr class="subtotal"><th scope="row">Year total</th><td id="year-estimated"></td><td id="year-actual"></td><td id="year-difference"></td><td id="year-income"></td><td id="year-target"></td><td id="year-cash-left"></td></tr></tfoot>
+</table>
+</div>
+<div class="ledger" id="year-comparison-table" role="region" aria-label="Actual spending compared with last year" tabindex="0" hidden>
+<table aria-label="Year-over-year spending">
+<thead><tr><th scope="col">Month</th><th scope="col" id="year-comparison-prior"></th><th scope="col" id="year-comparison-current"></th><th scope="col">Change</th><th scope="col">Change (%)</th></tr></thead>
+<tbody id="year-comparison-rows"></tbody>
 </table>
 </div>
 <div class="month-tools"><button type="button" id="export-year">Download yearly summary (CSV)</button></div>
@@ -1509,7 +1516,85 @@ function calendarQuarters(summary) {
   });
 }
 
+function yearOverYearSpending() {
+  const year = selectedMonth.slice(0,4);
+  const previousYear = String(Number(year) - 1).padStart(4,'0');
+  const totals = {prior:0, current:0};
+  let comparableMonths = 0;
+  const months = [];
+  for (let i = 1; i <= 12; i++) {
+    const suffix = '-' + String(i).padStart(2,'0');
+    const key = year + suffix;
+    const current = recordedActual(key === selectedMonth ? entries : readMonth(key, () => null));
+    const prior = recordedActual(readMonth(previousYear + suffix, () => null));
+    if (prior !== null && current !== null) {
+      totals.prior += prior;
+      totals.current += current;
+      comparableMonths++;
+    }
+    months.push({key, prior, current});
+  }
+  return {year, previousYear, months, comparableMonths,
+    totals:comparableMonths === 0 ? {prior:null, current:null} : totals};
+}
+
+function spendingChange({prior, current}) {
+  const amount = prior === null || current === null ? null : current - prior;
+  return {amount, percent:amount === null || prior === 0 ? null : amount / prior};
+}
+
+function renderYearComparison(summary) {
+  const {year, previousYear, months, totals, comparableMonths} = summary;
+  byId('year-note').textContent = 'Actual spending in ' + year + ' and ' + previousYear +
+    '. Totals compare the ' + comparableMonths + ' of 12 months with actual spending recorded in both years. ' +
+    'Percentage change needs a nonzero prior-year amount.';
+  byId('year-comparison-prior').textContent = previousYear + ' actual';
+  byId('year-comparison-current').textContent = year + ' actual';
+  byId('export-year').textContent = 'Download year-over-year spending (CSV)';
+  const monthFormat = new Intl.DateTimeFormat('en-IN',{month:'long',timeZone:'UTC'});
+  const percentFormat = new Intl.NumberFormat('en-IN',{style:'percent',maximumFractionDigits:1});
+  const rows = document.createDocumentFragment();
+  const addRow = (label, values) => {
+    const row = document.createElement('tr');
+    const {amount, percent} = spendingChange(values);
+    appendText(row,'th',label).scope = 'row';
+    for (const value of [values.prior, values.current, amount]) {
+      appendText(row,'td',value === null ? '—' : money.format(value / 100));
+    }
+    appendText(row,'td',percent === null ? '—' : percentFormat.format(percent));
+    rows.append(row);
+    return row;
+  };
+  for (const values of months) {
+    const name = monthFormat.format(new Date(values.key + '-01T00:00:00Z'));
+    const row = addRow(name, values);
+    if (values.key === selectedMonth) row.setAttribute('aria-current','true');
+  }
+  addRow('Comparable months total', totals).className = 'subtotal';
+  byId('year-comparison-rows').replaceChildren(rows);
+}
+
+function yearComparisonCsv({year, previousYear, months, totals}) {
+  const format = value => value === null ? '' : (value / 100).toFixed(2);
+  const row = (label, values) => {
+    const {amount, percent} = spendingChange(values);
+    return [label,format(values.prior),format(values.current),format(amount),percent === null ? '' : (percent * 100).toFixed(2)].join(',');
+  };
+  return [
+    'Month,' + previousYear + ' actual (INR),' + year + ' actual (INR),Change (INR),Change (%)',
+    ...months.map(values => row(values.key,values)),
+    row('Comparable months total',totals)
+  ].join('\r\n') + '\r\n';
+}
+
 function renderYear() {
+  const comparing = yearGroupBy.value === 'year-over-year';
+  byId('year-summary-table').hidden = comparing;
+  byId('year-comparison-table').hidden = !comparing;
+  if (comparing) {
+    renderYearComparison(yearOverYearSpending());
+    return;
+  }
   const summary = yearSummary();
   const {year, months, totals} = summary;
   const quarterly = yearGroupBy.value === 'quarter';
@@ -1586,6 +1671,11 @@ exportFilteredExpenses.addEventListener('click', () => {
   downloadCsv(expenseCsv(selectedMonth,visibleExpenses(),true), 'starwalt-expenses-filtered-' + selectedMonth + '.csv');
 });
 byId('export-year').addEventListener('click', () => {
+  if (yearGroupBy.value === 'year-over-year') {
+    const comparison = yearOverYearSpending();
+    downloadCsv(yearComparisonCsv(comparison), 'starwalt-year-over-year-' + comparison.year + '.csv');
+    return;
+  }
   const summary = yearSummary();
   const quarterly = yearGroupBy.value === 'quarter';
   const name = quarterly ? 'starwalt-quarterly-expense-summary-' : 'starwalt-expense-summary-';
