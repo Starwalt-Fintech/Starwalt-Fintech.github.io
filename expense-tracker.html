@@ -293,6 +293,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <p id="bill-filter-result" role="status"></p>
 <div class="calendar-export">
 <button type="button" id="bill-calendar-download" disabled>Download shown bills (.ics)</button>
+<button type="button" id="bill-schedule-csv" disabled>Download shown bills (CSV)</button>
 <label><input type="checkbox" id="bill-calendar-reminder">Add one-day reminders for unpaid bills</label>
 <p id="bill-calendar-export-status" role="status"></p>
 </div>
@@ -320,6 +321,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <option value="all">All dates</option><option value="overdue">Overdue</option><option value="upcoming">Next 30 days, including today</option>
 </select></label>
 <p id="unpaid-history-status" role="status"></p>
+<div class="calendar-export"><button type="button" id="unpaid-history-csv" disabled>Download shown unpaid bills (CSV)</button></div>
 <div class="ledger" id="unpaid-history-table" role="region" aria-label="Unpaid bills across saved months" tabindex="0" hidden>
 <table>
 <thead><tr><th scope="col">Bill</th><th scope="col">Due date</th><th scope="col">Amount</th><th scope="col">Tracker month</th></tr></thead>
@@ -491,6 +493,8 @@ const calendarClear = byId('bill-calendar-clear');
 let billDateFilter = '';
 let visibleCalendarBills = [];
 const billCalendarDownload = byId('bill-calendar-download');
+const billScheduleCsv = byId('bill-schedule-csv');
+const unpaidHistoryCsv = byId('unpaid-history-csv');
 const billDateFormat = new Intl.DateTimeFormat('en-IN', {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
 const historyLabel = new Intl.DateTimeFormat('en-IN', {month:'short',year:'numeric',timeZone:'UTC'});
 const shareFormat = new Intl.NumberFormat('en-IN', {style:'percent',maximumFractionDigits:1});
@@ -1014,11 +1018,13 @@ function renderUnpaidHistory() {
   }
   byId('unpaid-history-rows').replaceChildren(rows);
   byId('unpaid-history-table').hidden = bills.length === 0;
+  unpaidHistoryCsv.disabled = bills.length === 0;
   const missing = bills.length - known;
   byId('unpaid-history-status').textContent = bills.length === 0 ? 'No unpaid dated bills match this view.' :
     bills.length + (bills.length === 1 ? ' bill' : ' bills') +
     (known ? ' · ' + money.format(total / 100) + ' total with amounts entered' : '') +
     (missing ? ' · ' + missing + ' without an amount' : '');
+  return bills;
 }
 
 function renderBillCalendar(bills) {
@@ -1124,6 +1130,7 @@ function renderBillSchedule() {
   byId('bill-schedule-rows').replaceChildren(rows);
   const shown = visibleCalendarBills.length;
   billCalendarDownload.disabled = shown === 0;
+  billScheduleCsv.disabled = shown === 0;
   byId('bill-filter-result').textContent = !bills.length || (filter === 'all' && !billDateFilter) ? '' : shown
     ? 'Showing ' + shown + ' of ' + bills.length + ' dated bills.'
     : 'No bills match the selected filters.';
@@ -1608,6 +1615,33 @@ function csvText(value) {
   const name = /^[\s]*[=+@-]|^[\t\r\n]/.test(value) ? "'" + value : value;
   return '"' + name.replaceAll('"','""') + '"';
 }
+
+function datedBillsCsv(bills) {
+  const header = 'Tracker month,Group,Bill,Due date,Payment status,Amount (INR),Amount source,Payment method';
+  const rows = bills.map(({key,group,entry}) => {
+    const amount = billAmount(entry);
+    const source = amount === null ? '' : entry.actual === '' ? 'Estimate' : 'Actual';
+    return [
+      key,csvText(groups[group].name),csvText(entry.name),entry.dueDate,entry.paid === true ? 'Paid' : 'Unpaid',
+      amount === null ? '' : (amount / 100).toFixed(2),source,csvText(paymentMethods.get(entry.method) ?? '')
+    ].join(',');
+  });
+  return [header,...rows].join('\r\n') + '\r\n';
+}
+
+billScheduleCsv.addEventListener('click', () => {
+  if (visibleCalendarBills.length === 0) return;
+  const bills = visibleCalendarBills.map(({key:group,index}) => ({
+    key:selectedMonth,group,entry:entries[group][index]
+  }));
+  downloadCsv(datedBillsCsv(bills), 'starwalt-bill-schedule-' + selectedMonth + '.csv');
+});
+
+unpaidHistoryCsv.addEventListener('click', () => {
+  const bills = renderUnpaidHistory();
+  if (bills.length === 0) return;
+  downloadCsv(datedBillsCsv(bills), 'starwalt-unpaid-bills-' + unpaidHistoryFilter.value + '.csv');
+});
 
 function expenseCsv(key, data, filtered = false) {
   const format = (amount) => (amount / 100).toFixed(2);
