@@ -56,6 +56,23 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .expense-sort{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.filtered-subtotal{width:100%;margin:0;color:var(--green);font-size:13px;font-weight:700}
 .expense-history .add-row{margin:8px 0}.expense-history .ledger{margin-top:8px}.expense-history table{min-width:470px;font-size:13px}.expense-history td{white-space:nowrap}.expense-history .history-month-button{border:0;background:transparent;color:var(--green);font:inherit;text-decoration:underline;padding:4px;cursor:pointer}
 </style>
+<style id="monthly-print-style">
+.monthly-print-report{display:none}
+@media print{
+  body.printing-expense-report{margin:0;background:white;color:#111}
+  body.printing-expense-report> :not(.monthly-print-report){display:none!important}
+  body.printing-expense-report>.monthly-print-report{display:block;color:#111;font:10pt/1.4 system-ui,sans-serif}
+  .monthly-print-report h1{font:700 21pt/1.2 system-ui,sans-serif;letter-spacing:normal;margin:0;color:#111}
+  .monthly-print-report h2{font-size:13pt;margin:14pt 0 4pt;break-after:avoid}
+  .monthly-print-report p{margin:4pt 0 9pt;color:#333}
+  .monthly-print-report table{width:100%;min-width:0;border-collapse:collapse}
+  .monthly-print-report th,.monthly-print-report td{padding:4pt;border-bottom:1px solid #aaa;background:white;color:#111;text-align:right}
+  .monthly-print-report th:first-child{text-align:left;overflow-wrap:anywhere}
+  .monthly-print-report td{white-space:nowrap}
+  .monthly-print-report thead{display:table-header-group}
+  .monthly-print-report tr{break-inside:avoid}
+}
+</style>
 </head>
 <body>
 <header><div class="wrap"><a class="brand" href="./"><span aria-hidden="true">✦</span>Starwalt Fintech</a><a href="./#calculator">Back to calculators</a></div></header>
@@ -70,6 +87,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <button type="button" id="copy-estimates">Reuse last month’s estimates</button>
 <button type="button" id="copy-recurring">Bring in recurring bills</button>
 <button type="button" id="export-expenses">Download month (CSV)</button>
+<button type="button" id="print-expenses">Print or save month as PDF</button>
 <p class="status" id="month-action" role="status"></p>
 </div>
 <dl class="totals" aria-label="Monthly totals">
@@ -1327,6 +1345,70 @@ function monthlyAmounts(data) {
   return amounts;
 }
 
+function appendReportRow(section, label, amounts, heading = false) {
+  const row = document.createElement('tr');
+  appendText(row,'th',label).scope = heading ? 'col' : 'row';
+  for (const amount of amounts) {
+    const cell = appendText(row,heading ? 'th' : 'td',heading ? amount : amount === null ? '—' : money.format(amount / 100));
+    if (heading) cell.scope = 'col';
+  }
+  section.append(row);
+}
+
+function buildMonthlyReport(key, data) {
+  const report = document.createElement('article');
+  report.className = 'monthly-print-report';
+  appendText(report,'h1','Household expense report');
+  appendText(report,'p',monthLabel.format(new Date(key + '-01T00:00:00Z')) + ' · Starwalt Fintech');
+  const summary = document.createElement('table');
+  const totals = monthlyAmounts(data);
+  appendReportRow(summary.createTHead(),'Month total',['Estimated','Actual','Difference'],true);
+  appendReportRow(summary.createTBody(),'All expenses',[totals.estimated,totals.actual,budgetDifference(totals.estimated,totals.actual)]);
+  report.append(summary);
+  appendText(report,'p','Amounts in INR. A negative difference means spending was above the estimate.');
+  for (const [group, {name}] of Object.entries(groups)) {
+    const rows = data[group].filter(isTrackedExpense);
+    appendText(report,'h2',name);
+    if (rows.length === 0) {
+      appendText(report,'p','No amounts or payment details recorded.');
+      continue;
+    }
+    const table = document.createElement('table');
+    appendReportRow(table.createTHead(),'Expense',['Estimated','Actual','Difference'],true);
+    const body = table.createTBody();
+    for (const entry of rows) {
+      const estimated = entry.estimated === '' ? null : paise(entry.estimated);
+      const actual = entry.actual === '' ? null : paise(entry.actual);
+      appendReportRow(body,entry.name,[estimated,actual,budgetDifference(estimated,actual)]);
+    }
+    const {estimated, actual} = monthlyAmounts({[group]:rows});
+    appendReportRow(body,'Subtotal',[estimated,actual,budgetDifference(estimated,actual)]);
+    report.append(table);
+  }
+  return report;
+}
+
+function printMonthlyReport() {
+  let target = window;
+  try {
+    if (window.parent.document.body) target = window.parent;
+  } catch {
+    // A standalone tracker or one embedded on another site can print its own document.
+  }
+  const page = target.document;
+  if (page.body.classList.contains('printing-expense-report')) return;
+  if (!page.getElementById('monthly-print-style')) {
+    page.head.append(byId('monthly-print-style').cloneNode(true));
+  }
+  const report = page.body.appendChild(buildMonthlyReport(selectedMonth,entries));
+  page.body.classList.add('printing-expense-report');
+  target.addEventListener('afterprint', () => {
+    page.body.classList.remove('printing-expense-report');
+    report.remove();
+  }, {once:true});
+  target.print();
+}
+
 function yearSummary() {
   const year = selectedMonth.slice(0,4);
   const totals = {estimated:null, actual:null, income:null, target:null, cashLeft:null};
@@ -1411,6 +1493,7 @@ function downloadFile(content, filename, type) {
 byId('export-expenses').addEventListener('click', () => {
   downloadCsv(expenseCsv(selectedMonth, entries), 'starwalt-expenses-' + selectedMonth + '.csv');
 });
+byId('print-expenses').addEventListener('click', printMonthlyReport);
 exportFilteredExpenses.addEventListener('click', () => {
   updateTotals();
   applyExpenseFilter();
