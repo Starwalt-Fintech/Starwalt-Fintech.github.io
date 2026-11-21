@@ -364,6 +364,16 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <button type="submit">Save changes</button><button type="button" id="rename-cancel">Cancel</button>
 </form>
 </dialog>
+<dialog class="rename-dialog" id="copy-expense-dialog" aria-labelledby="copy-expense-heading">
+<h2 id="copy-expense-heading">Copy expense to another month</h2>
+<p class="note" id="copy-expense-name"></p>
+<p class="note">Copies the estimate, payment method, and notes. The copy starts unpaid with a blank actual amount.</p>
+<form class="add-row" id="copy-expense-form">
+<label>Destination month<input type="month" id="copy-expense-month" required></label>
+<div id="copy-expense-due-option" hidden><label><span><input type="checkbox" id="copy-expense-due"> Keep the due day</span></label></div>
+<button type="submit">Copy and open month</button><button type="button" id="copy-expense-cancel">Cancel</button>
+</form>
+</dialog>
 <script>
 const byId = (id) => document.getElementById(id);
 const groups = {
@@ -396,6 +406,10 @@ const missingActualOnly = byId('missing-actual-only');
 const expenseFilterCheckboxes = [overBudgetOnly,unpaidOnly,overdueOnly,missingActualOnly];
 const expenseSearch = byId('expense-search');
 const renameDialog = byId('rename-dialog');
+const copyExpenseDialog = byId('copy-expense-dialog');
+const copyExpenseMonth = byId('copy-expense-month');
+const copyExpenseDue = byId('copy-expense-due');
+let copyExpenseSource;
 const renameName = byId('rename-name');
 const editExpenseGroup = byId('edit-expense-group');
 const expenseMethod = byId('expense-method');
@@ -602,6 +616,56 @@ function resetExpenseFilters() {
 function expenseSearchText(entry) {
   return [entry.name,paymentMethods.get(entry.method),entry.note].join(' ').toLowerCase();
 }
+
+function startExpenseCopy(entry, group) {
+  copyExpenseSource = {entry,group};
+  byId('copy-expense-name').textContent = entry.name;
+  copyExpenseMonth.value = shiftMonth(selectedMonth,1);
+  copyExpenseMonth.setCustomValidity('');
+  const hasDueDate = validDueDate(entry.dueDate);
+  byId('copy-expense-due-option').hidden = !hasDueDate;
+  copyExpenseDue.disabled = !hasDueDate;
+  copyExpenseDue.checked = false;
+  copyExpenseDialog.showModal();
+  copyExpenseDialog.scrollIntoView({block:'center'});
+  copyExpenseMonth.focus();
+}
+
+function copyExpenseToMonth(entry, group, destination, keepDueDay) {
+  const data = readMonth(destination);
+  const target = {name:entry.name, estimated:entry.estimated, actual:''};
+  if (entry.method) target.method = entry.method;
+  if (entry.note) target.note = entry.note;
+  if (keepDueDay && validDueDate(entry.dueDate)) {
+    target.dueDate = dueDateForMonth(destination, Number(entry.dueDate.slice(-2)));
+  }
+  const position = data[group].findIndex(existing => existing.name.toLowerCase() === entry.name.toLowerCase() &&
+    !isTrackedExpense(existing) && !existing.method && !existing.note && !existing.recurring);
+  if (position === -1) data[group].push(target);
+  else data[group][position] = target;
+  memory.set(destination,data);
+  writeSaved(expensePrefix + destination,data);
+}
+
+byId('copy-expense-cancel').addEventListener('click', () => copyExpenseDialog.close());
+copyExpenseMonth.addEventListener('input', () => copyExpenseMonth.setCustomValidity(''));
+byId('copy-expense-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const destination = copyExpenseMonth.value;
+  if (!copyExpenseSource) return;
+  if (!isMonthKey(destination) || destination === selectedMonth) {
+    copyExpenseMonth.setCustomValidity('Choose a valid month different from the current month.');
+    copyExpenseMonth.reportValidity();
+    return;
+  }
+  const {entry,group} = copyExpenseSource;
+  copyExpenseSource = undefined;
+  copyExpenseToMonth(entry,group,destination,copyExpenseDue.checked);
+  copyExpenseDialog.close();
+  goToMonth(destination);
+  byId('month-action').textContent = 'Copied ' + entry.name + ' to ' + monthLabel.format(new Date(destination + '-01T00:00:00Z')) + '.';
+  month.focus();
+});
 
 function startRename(entry, key, index) {
   renameTarget = {entry,key,index,month:selectedMonth};
@@ -1349,6 +1413,12 @@ function render() {
       rename.textContent = 'Edit';
       rename.setAttribute('aria-label', 'Edit ' + entry.name);
       rename.addEventListener('click', () => startRename(entry, key, index));
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'rename';
+      copy.textContent = 'Copy';
+      copy.setAttribute('aria-label', 'Copy ' + entry.name + ' to another month');
+      copy.addEventListener('click', () => startExpenseCopy(entry,key));
       const actionsCell = row.insertCell();
       actionsCell.className = 'row-actions';
       const recurringLabel = document.createElement('label');
@@ -1365,7 +1435,7 @@ function render() {
         if (recurringReview.open) renderRecurringReview();
       });
       recurringLabel.append(recurring, 'Recurring');
-      actionsCell.append(recurringLabel, rename, action);
+      actionsCell.append(recurringLabel, rename, copy, action);
     });
     const subtotal = body.insertRow();
     subtotal.className = 'subtotal';
