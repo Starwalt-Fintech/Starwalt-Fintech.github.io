@@ -59,6 +59,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .clear-expense-filters:disabled{opacity:.55;cursor:default}.clear-expense-filters:disabled:hover{background:#fff}
 .compare-months{margin-top:8px}.compare-months summary{cursor:pointer;font-weight:750;color:var(--green)}.compare-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0;font-size:13px}.compare-controls input,.compare-controls button{border:1px solid #a9b7a8;border-radius:6px;background:#fff;color:var(--green);padding:4px 7px;font:inherit}.compare-months .ledger{margin:8px 0}.compare-months table{min-width:445px;font-size:13px}
 .expense-sort{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.filtered-subtotal{width:100%;margin:0;color:var(--green);font-size:13px;font-weight:700}
+.amount-filters{display:flex;gap:6px 10px;flex-wrap:wrap;align-items:center;min-width:0;margin:0;padding:3px 8px 7px;border:1px solid var(--line);border-radius:7px}.amount-filters legend{font-size:12px;color:var(--muted)}.amount-filters .amount{width:82px;padding:4px;font-size:13px}
 .expense-history .add-row{margin:8px 0}.expense-history .ledger{margin-top:8px}.expense-history table{min-width:470px;font-size:13px}.expense-history td{white-space:nowrap}.expense-history .history-month-button{border:0;background:transparent;color:var(--green);font:inherit;text-decoration:underline;padding:4px;cursor:pointer}
 .month-review-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:8px;margin-top:8px}.month-review-list section{border:1px solid var(--line);border-radius:8px;padding:8px 10px}.month-review-list h3{margin:0}.month-review-list button{margin-top:4px}
 </style>
@@ -322,6 +323,12 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 <label class="tracker-filter-select">Filter by expense group<select id="expense-group-filter">
 <option value="all">All groups</option><option value="essentials">Household essentials</option><option value="other">Other expenses</option>
 </select></label>
+<fieldset class="amount-filters">
+<legend>Amount range (₹)</legend>
+<label class="tracker-filter-select">Use <select id="expense-amount-field"><option value="actual">Actual</option><option value="estimated">Estimated</option></select></label>
+<label class="tracker-filter-select">Min <input class="amount" type="number" id="expense-min-amount" inputmode="decimal" min="0" max="1000000000" step=".01"></label>
+<label class="tracker-filter-select">Max <input class="amount" type="number" id="expense-max-amount" inputmode="decimal" min="0" max="1000000000" step=".01"></label>
+</fieldset>
 <button type="button" class="clear-expense-filters" id="export-filtered-expenses" disabled>Download filtered CSV</button>
 <button type="button" class="clear-expense-filters" id="clear-expense-filters">Clear expense filters</button>
 <div class="expense-sort">
@@ -424,6 +431,9 @@ const paymentMethods = new Map([
 ]);
 const expenseMethodFilter = byId('expense-method-filter');
 const expenseGroupFilter = byId('expense-group-filter');
+const expenseAmountField = byId('expense-amount-field');
+const expenseMinAmount = byId('expense-min-amount');
+const expenseMaxAmount = byId('expense-max-amount');
 const exportFilteredExpenses = byId('export-filtered-expenses');
 const filteredExpenseSubtotal = byId('filtered-expense-subtotal');
 const expenseSort = byId('expense-sort');
@@ -583,7 +593,12 @@ function applyExpenseFilter() {
   const query = expenseSearch.value.trim().toLowerCase();
   const method = expenseMethodFilter.value;
   const group = expenseGroupFilter.value;
-  const active = Boolean(query) || method !== 'all' || group !== 'all' ||
+  const min = expenseMinAmount.value === '' ? null : paise(expenseMinAmount.value);
+  const max = expenseMaxAmount.value === '' ? null : paise(expenseMaxAmount.value);
+  const invalidAmount = !expenseMinAmount.validity.valid || !expenseMaxAmount.validity.valid;
+  const reversed = min !== null && max !== null && min > max;
+  const amountFilter = !invalidAmount && !reversed && (min !== null || max !== null);
+  const active = Boolean(query) || method !== 'all' || group !== 'all' || amountFilter ||
     expenseFilterCheckboxes.some(checkbox => checkbox.checked);
   let count = 0;
   for (const row of document.querySelectorAll('.entry')) {
@@ -594,22 +609,35 @@ function applyExpenseFilter() {
     const matchesMissing = !missingActualOnly.checked || row.classList.contains('missing-actual');
     const matchesMethod = method === 'all' || row.dataset.paymentMethod === method;
     const matchesGroup = group === 'all' || row.parentElement.id === group;
+    const matchesAmount = !amountFilter || matchesExpenseAmount(
+      entries[row.parentElement.id][Number(row.dataset.expenseIndex)][expenseAmountField.value],min,max
+    );
     row.hidden = !matchesExpense || !matchesPayment || !matchesDue || !matchesMissing || !matchesMethod || !matchesGroup ||
-      (overBudgetOnly.checked && !isOverBudget);
+      !matchesAmount || (overBudgetOnly.checked && !isOverBudget);
     if (!row.hidden) count++;
   }
-  exportFilteredExpenses.disabled = !active || count === 0;
+  exportFilteredExpenses.disabled = invalidAmount || reversed || !active || count === 0;
   filteredExpenseSubtotal.hidden = exportFilteredExpenses.disabled;
   updateFilteredSubtotal();
-  byId('filter-status').textContent = active
+  byId('filter-status').textContent = invalidAmount ? 'Enter amounts from ₹0 to ₹100 crore, with up to two decimal places.' :
+    reversed ? 'Enter a maximum amount at least as large as the minimum.' : active
     ? (count === 0 ? 'No matching expenses. ' : count + (count === 1 ? ' expense shown. ' : ' expenses shown. ')) + 'Totals still cover the full month.'
     : '';
+}
+
+function matchesExpenseAmount(value,min,max) {
+  if (value === '') return false;
+  const amount = paise(value);
+  return (min === null || amount >= min) && (max === null || amount <= max);
 }
 
 function resetExpenseFilters() {
   expenseSearch.value = '';
   expenseMethodFilter.value = 'all';
   expenseGroupFilter.value = 'all';
+  expenseAmountField.value = 'actual';
+  expenseMinAmount.value = '';
+  expenseMaxAmount.value = '';
   for (const checkbox of expenseFilterCheckboxes) checkbox.checked = false;
 }
 
@@ -1346,7 +1374,8 @@ function render() {
             input.reportValidity();
             input.value = entry[field];
           }
-          if (expenseFilterCheckboxes.some(checkbox => checkbox.checked)) applyExpenseFilter();
+          if (expenseMinAmount.value || expenseMaxAmount.value ||
+              expenseFilterCheckboxes.some(checkbox => checkbox.checked)) applyExpenseFilter();
         });
         row.insertCell().append(input);
       }
@@ -2347,6 +2376,9 @@ byId('payment-progress').hidden = false;
 expenseSearch.addEventListener('input', applyExpenseFilter);
 expenseMethodFilter.addEventListener('change', applyExpenseFilter);
 expenseGroupFilter.addEventListener('change', applyExpenseFilter);
+expenseAmountField.addEventListener('change', applyExpenseFilter);
+expenseMinAmount.addEventListener('input', applyExpenseFilter);
+expenseMaxAmount.addEventListener('input', applyExpenseFilter);
 byId('apply-expense-sort').addEventListener('click', () => {
   appliedExpenseSort = expenseSort.value;
   sortExpenseRows();
