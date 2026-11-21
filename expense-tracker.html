@@ -25,6 +25,7 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 .expense-scenario{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.expense-scenario h3{margin:0;font-size:14px}.expense-scenario .cash-inputs{margin:6px 0 10px}
 .year-overview .ledger{margin:8px 0}.year-overview table{min-width:660px;font-size:13px}.year-overview td{white-space:nowrap}.year-overview .month-tools{margin:8px 0 0}.year-overview [aria-current]{background:#f0f5e8}
 .year-overview .tracker-filter-select{margin:6px 0}.year-overview th small{display:block;font-weight:400;color:var(--muted)}
+.period-report .add-row,.period-report .month-tools{margin:8px 0}.period-report table{min-width:490px;font-size:13px}.period-report td{white-space:nowrap}
 #year-comparison-table table{min-width:450px}
 .backup-tools .month-tools{margin:9px 0 0}.backup-tools .status:empty{display:none}.backup-tools input{max-width:100%;font-size:13px}
 .expense-search{display:flex;align-items:center;gap:6px}.expense-search input{font-size:14px;padding:5px 8px;border:1px solid #a9b7a8;border-radius:6px;width:min(180px,52vw)}.row-actions{white-space:nowrap}.rename{border:0;background:transparent;color:#214b38;padding:3px;font-size:12px;text-decoration:underline}
@@ -201,6 +202,22 @@ main{padding:42px 0 56px}h1{margin:0;font:400 clamp(36px,6vw,62px)/1.05 Georgia,
 </table>
 </div>
 <div class="month-tools"><button type="button" id="export-year">Download yearly summary (CSV)</button></div>
+</details>
+<details class="spending-insights period-report" id="period-report" hidden>
+<summary>Custom spending report</summary>
+<form class="add-row" id="period-report-form">
+<label>From month <input type="month" id="period-start" required></label>
+<label>Through month <input type="month" id="period-end" required></label>
+<button type="submit">Show report</button>
+</form>
+<p id="period-report-status" role="status"></p>
+<div class="ledger" id="period-report-table" role="region" aria-label="Spending by expense group for the selected range" tabindex="0" hidden>
+<table>
+<thead><tr><th scope="col">Expense group</th><th scope="col">Estimated</th><th scope="col">Actual</th><th scope="col">Difference</th><th scope="col">Months with actuals</th></tr></thead>
+<tbody id="period-report-rows"></tbody>
+</table>
+</div>
+<div class="month-tools" id="period-report-download" hidden><button type="button" id="export-period-report">Download report (CSV)</button></div>
 </details>
 <details class="spending-insights expense-history" id="expense-history" hidden>
 <summary>Search expenses across months</summary>
@@ -405,6 +422,10 @@ for (const [value,label] of paymentMethods) {
 const removedByMonth = new Map();
 let renameTarget;
 const yearOverview = byId('year-overview');
+const periodReport = byId('period-report');
+const periodStart = byId('period-start');
+const periodEnd = byId('period-end');
+let activeReportRange;
 const yearGroupBy = byId('year-group-by');
 const compareMonths = byId('compare-months');
 const compareMonth = byId('compare-month');
@@ -1192,6 +1213,7 @@ function updateTotals() {
   updateCashFlow(estimated, actual);
   renderBillForecast(entries, currentActual, cashPlan);
   if (yearOverview.open) renderYear();
+  if (periodReport.open && activeReportRange) renderPeriodReport();
   if (compareMonths.open) renderMonthComparison();
   updateFilteredSubtotal();
   if (billSchedule.open) renderBillSchedule();
@@ -1589,6 +1611,64 @@ function monthlyAmounts(data) {
     }
   }
   return amounts;
+}
+
+function spendingForPeriod(start, end) {
+  const buckets = Object.fromEntries([...Object.keys(groups),'total'].map(key => [
+    key,{estimated:null, actual:null, actualMonths:0}
+  ]));
+  const keys = savedMonthKeys([expensePrefix], [...memory.keys(), selectedMonth]);
+  const accumulate = (bucket,{estimated, actual}) => {
+    if (estimated !== null) bucket.estimated = (bucket.estimated ?? 0) + estimated;
+    if (actual !== null) {
+      bucket.actual = (bucket.actual ?? 0) + actual;
+      bucket.actualMonths++;
+    }
+  };
+  for (const key of keys) {
+    if (key < start || key > end) continue;
+    const data = key === selectedMonth ? entries : readMonth(key, () => null);
+    if (!data) continue;
+    for (const group of Object.keys(groups)) {
+      accumulate(buckets[group],monthlyAmounts({[group]:data[group]}));
+    }
+    accumulate(buckets.total,monthlyAmounts(data));
+  }
+  return Object.entries(buckets).map(([key,bucket]) => ({
+    key, label:groups[key]?.name ?? 'Period total', ...bucket
+  }));
+}
+
+function renderPeriodReport() {
+  const {start,end} = activeReportRange;
+  const totals = spendingForPeriod(start,end);
+  const rows = document.createDocumentFragment();
+  const format = amount => amount === null ? '—' : money.format(amount / 100);
+  for (const {key,label,estimated,actual,actualMonths} of totals) {
+    const row = document.createElement('tr');
+    if (key === 'total') row.className = 'subtotal';
+    appendText(row,'th',label).scope = 'row';
+    appendText(row,'td',format(estimated));
+    appendText(row,'td',format(actual));
+    difference(appendText(row,'td',''),budgetDifference(estimated,actual));
+    appendText(row,'td',actualMonths);
+    rows.append(row);
+  }
+  const range = [start,end].map(key => historyLabel.format(new Date(key + '-01T00:00:00Z'))).join(' to ');
+  byId('period-report-status').textContent = range + '. A dash marks missing amounts.';
+  byId('period-report-rows').replaceChildren(rows);
+  byId('period-report-table').hidden = false;
+  byId('period-report-download').hidden = false;
+}
+
+function periodReportCsv(start,end) {
+  const format = amount => amount === null ? '' : (amount / 100).toFixed(2);
+  return [
+    'From month,Through month,Expense group,Estimated (INR),Actual (INR),Difference (INR),Months with actuals',
+    ...spendingForPeriod(start,end).map(({label,estimated,actual,actualMonths}) => [
+      start,end,label,format(estimated),format(actual),format(budgetDifference(estimated,actual)),actualMonths
+    ].join(','))
+  ].join('\r\n') + '\r\n';
 }
 
 function appendReportRow(section, label, amounts, heading = false) {
@@ -2123,6 +2203,33 @@ scenarioAmount.addEventListener('blur', () => {
 });
 byId('group-limits').hidden = false;
 yearOverview.hidden = false;
+periodReport.hidden = false;
+periodReport.addEventListener('toggle', () => {
+  if (!periodReport.open) return;
+  if (!periodStart.value) periodStart.value = shiftMonth(selectedMonth,-2);
+  if (!periodEnd.value) periodEnd.value = selectedMonth;
+  if (activeReportRange) renderPeriodReport();
+});
+for (const input of [periodStart,periodEnd]) {
+  input.addEventListener('input', () => periodEnd.setCustomValidity(''));
+}
+byId('period-report-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const start = periodStart.value;
+  const end = periodEnd.value;
+  if (!isMonthKey(start) || !isMonthKey(end) || end < start) {
+    periodEnd.setCustomValidity('Choose a valid month on or after the start month.');
+    periodEnd.reportValidity();
+    return;
+  }
+  activeReportRange = {start,end};
+  renderPeriodReport();
+});
+byId('export-period-report').addEventListener('click', () => {
+  if (!activeReportRange) return;
+  const {start,end} = activeReportRange;
+  downloadCsv(periodReportCsv(start,end), 'starwalt-spending-' + start + '-to-' + end + '.csv');
+});
 billSchedule.hidden = false;
 recurringReview.hidden = false;
 unpaidHistory.hidden = false;
