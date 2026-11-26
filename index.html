@@ -42,6 +42,27 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 .expense-frame{width:100%;height:1200px;display:block;border:0;margin:0}
 #expense-tracker>.wrap{width:min(1000px,calc(100% - 32px))}
 #expense-tracker{padding-bottom:25px}
+/* Starwalt chat */
+#starwalt-chat{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));z-index:20;font-size:14px}
+#chat-launch,#chat-send{border:0;background:#d9f487;color:#102522;font-weight:800;cursor:pointer}
+#chat-launch{display:flex;align-items:center;gap:8px;margin-left:auto;padding:11px 16px;border-radius:999px;border:1px solid #a9c65d;box-shadow:0 7px 26px #10252236}
+#chat-launch[hidden],#chat-panel[hidden]{display:none}
+#chat-panel{width:min(390px,calc(100vw - 28px));height:min(550px,calc(100dvh - 28px));display:flex;flex-direction:column;background:#fafcf6;border:1px solid #93a99b;border-radius:22px;overflow:hidden;box-shadow:0 18px 65px #10252244}
+.chat-banner{display:flex;align-items:center;gap:10px;padding:13px;background:#102522;color:#fff}
+.chat-avatar{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:var(--lime);color:#102522;font-size:21px;flex:none}
+.chat-title{font-weight:800;font-size:16px}.chat-mode{color:#c2d4ca;font-size:12px}
+#chat-close{margin-left:auto;width:40px;height:40px;border:1px solid #60786c;border-radius:11px;background:transparent;color:#fff;font-size:22px;cursor:pointer}
+#chat-log{display:flex;flex:1;min-height:0;flex-direction:column;gap:10px;overflow:auto;padding:14px;overscroll-behavior:contain}
+.chat-message{max-width:92%;padding:9px 12px;background:#e9f0e8;border-radius:4px 14px 14px;color:#102522;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-message.mine{align-self:flex-end;background:#d9f487;border-radius:14px 4px 14px 14px}
+.chat-message a{display:block;margin-top:5px;text-decoration:underline;font-weight:750}
+.chat-prompts{display:flex;gap:6px;overflow-x:auto;padding:5px 12px 9px}
+.chat-prompts button{min-height:38px;flex:none;border:1px solid #a7b9aa;border-radius:999px;padding:5px 10px;background:white;color:#254a3c;cursor:pointer;font-weight:700;font-size:12px}
+#chat-form{display:flex;gap:6px;padding:10px 12px;background:white;border-top:1px solid var(--line)}
+#chat-input{min-width:0;flex:1;border:1px solid #a7b9aa;border-radius:11px;padding:8px 10px;font-size:16px}
+#chat-send{padding:7px 11px;border-radius:11px}#chat-send:disabled{opacity:.55;cursor:default}
+#chat-status{padding:0 12px;background:white;color:#436052;font-size:12px}#chat-status:empty{display:none}
+@media print{#starwalt-chat{display:none}}
 </style>
 </head>
 <body>
@@ -352,6 +373,21 @@ main section{scroll-margin-top:22px}.section{padding:79px 0}.section h2{font-siz
 </section>
 </main>
 <footer class="dark"><div class="wrap"><span>Starwalt Fintech · Personal finance education</span><span><a href="https://github.com/Starwalt-Fintech">GitHub</a><a href="https://x.com/starwaltcompany">X</a></span></div></footer>
+<div id="starwalt-chat" hidden>
+<button type="button" id="chat-launch" aria-controls="chat-panel" aria-expanded="false"><span aria-hidden="true">✦</span> Chat with Starwalt</button>
+<section id="chat-panel" aria-labelledby="chat-title" hidden>
+<div class="chat-banner"><span class="chat-avatar" aria-hidden="true">✦</span><div><p class="chat-title" id="chat-title">Starwalt Assistant</p><p class="chat-mode" id="chat-mode">Website help</p></div><button type="button" id="chat-close" aria-label="Close chat">×</button></div>
+<div id="chat-log" role="log" aria-label="Conversation" tabindex="0"><p class="chat-message">Hi! Ask me where to track expenses, find a calculator, or read a finance guide.</p></div>
+<div class="chat-prompts" role="group" aria-label="Quick prompts">
+<button type="button">Track expenses</button><button type="button">Plan a savings goal</button><button type="button">Calculate EMI</button>
+</div>
+<p id="chat-status" role="status"></p>
+<form id="chat-form" aria-label="Send a message">
+<input id="chat-input" aria-label="Your message" placeholder="Ask about a tool…" maxlength="400" required autocomplete="off">
+<button id="chat-send" type="submit">Send</button>
+</form>
+</section>
+</div>
 <script>
 const money = new Intl.NumberFormat('en-IN', {style:'currency',currency:'INR',maximumFractionDigits:0});
 const byId = (id) => document.getElementById(id);
@@ -928,6 +964,108 @@ function drawChart() {
 drawChart();
 if ('ResizeObserver' in window) new ResizeObserver(drawChart).observe(chart);
 else window.addEventListener('resize', drawChart);
+</script>
+<script>
+(() => {
+  const get = id => document.getElementById(id);
+  const launcher = get('chat-launch');
+  const panel = get('chat-panel');
+  const input = get('chat-input');
+  const log = get('chat-log');
+  const status = get('chat-status');
+  const send = get('chat-send');
+  const topics = [
+    {match:/bill|expense|household|csv|overdue|track.*spend/i, text:'Open the Household Expense Tracker, choose a month, and enter your estimates and actuals. Use Bill schedule to review due dates, or Download month (CSV) to export expenses.', target:'expense-tracker', link:'Open Household Expense Tracker'},
+    {match:/\bemi\b|loan|mortgage/i, text:'Enter the loan amount, annual interest rate, and loan term in the EMI calculator to estimate the monthly payment.', target:'emi-calculator', link:'Open EMI calculator'},
+    {match:/saving|savings|goal|target/i, text:'Enter the target amount, what you already have saved, and how many months you have. The planner estimates the monthly amount to set aside.', target:'goal-planner', link:'Open Savings goal planner'},
+    {match:/emergency|rainy day/i, text:'Use your essential monthly expenses and desired number of months to estimate an emergency fund target.', target:'emergency-calculator', link:'Open Emergency fund calculator'},
+    {match:/guide|article|learn|tax/i, text:'Browse the finance guides and use the topic filter to find a starting point.', target:'guides', link:'Browse finance guides'},
+    {match:/contact|email|support|human/i, text:'Use the contact section to email Starwalt Fintech about a guide or suggest a topic.', target:'contact', link:'Open contact section'},
+    {match:/calculator|inflation|deposit|net worth|invest/i, text:'The planning tools include calculators for inflation, deposits, net worth, loans, and savings.', target:'planning-tools', link:'Browse planning tools'}
+  ];
+  const fallback = 'I can guide you to the expense tracker, finance calculators, guides, or contact section. Try one of the quick prompts.';
+  const modelOptions = {expectedInputs:[{type:'text',languages:['en']}],expectedOutputs:[{type:'text',languages:['en']}]};
+  const ai = window.LanguageModel;
+  const modelReady = (async () => {
+    try { return await ai?.availability(modelOptions) === 'available'; }
+    catch { return false; }
+  })();
+  modelReady.then(ready => {
+    if (ready) get('chat-mode').textContent = 'Website help · On-device AI available';
+  });
+
+  function setOpen(open) {
+    panel.hidden = !open;
+    launcher.hidden = open;
+    launcher.setAttribute('aria-expanded',String(open));
+    if (open) input.focus();
+    else launcher.focus();
+  }
+
+  function addMessage(text, mine, topic) {
+    const bubble = document.createElement('p');
+    bubble.className = mine ? 'chat-message mine' : 'chat-message';
+    bubble.textContent = text;
+    if (topic) {
+      const link = document.createElement('a');
+      link.href = '#' + topic.target;
+      link.textContent = topic.link;
+      link.addEventListener('click', () => setOpen(false));
+      bubble.append(link);
+    }
+    log.append(bubble);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function generateReply(question) {
+    if (!await modelReady) return fallback;
+    const signal = AbortSignal.timeout(7000);
+    let session;
+    try {
+      session = await ai.create({...modelOptions,signal,initialPrompts:[{role:'system',content:
+        'You are Starwalt Fintech website help. In 2 short sentences, explain only how to use the listed tools. Do not give personal financial, tax, legal or investment advice, cite rates, claim access to saved data, or invent features. Tools: Household Expense Tracker with estimates, actuals, due dates and CSV, savings goal planner, EMI, emergency fund, inflation, deposits, net worth, finance guides, and contact form by email. If unrelated, suggest the contact section.'}]});
+      const answer = await session.prompt(question,{signal});
+      return typeof answer === 'string' && answer.trim() ? answer.trim().slice(0,800) : fallback;
+    } catch {
+      return fallback;
+    } finally {
+      session?.destroy();
+    }
+  }
+
+  async function ask(question) {
+    const text = question.trim();
+    if (!text || send.disabled) return;
+    input.value = '';
+    addMessage(text,true);
+    const topic = topics.find(item => item.match.test(text));
+    if (topic) {
+      addMessage(topic.text,false,topic);
+      return;
+    }
+    send.disabled = true;
+    status.textContent = 'Preparing a reply…';
+    try { addMessage(await generateReply(text),false); }
+    finally {
+      send.disabled = false;
+      status.textContent = '';
+    }
+  }
+
+  launcher.addEventListener('click', () => setOpen(true));
+  get('chat-close').addEventListener('click', () => setOpen(false));
+  panel.addEventListener('keydown', event => {
+    if (event.key === 'Escape') setOpen(false);
+  });
+  panel.querySelectorAll('.chat-prompts button').forEach(button => {
+    button.addEventListener('click', () => ask(button.textContent));
+  });
+  get('chat-form').addEventListener('submit', event => {
+    event.preventDefault();
+    ask(input.value);
+  });
+  get('starwalt-chat').hidden = false;
+})();
 </script>
 </body>
 </html>
